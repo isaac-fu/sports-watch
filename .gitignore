@@ -21,6 +21,11 @@ profile.cov
 # Dependency directories (remove the comment below to include it)
 # vendor/
 
+# Node / Next.js
+node_modules/
+.next/
+out/
+
 # Go workspace file
 go.work
 go.work.sum

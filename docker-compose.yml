@@ -1,0 +1,35 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: courtside
+      POSTGRES_USER: courtside
+      POSTGRES_PASSWORD: courtside-local
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U courtside -d courtside"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://courtside:courtside-local@db:5432/courtside
+      SPORTS_DATA_PROVIDER: ${SPORTS_DATA_PROVIDER:-mock}
+      BALLDONTLIE_API_KEY: ${BALLDONTLIE_API_KEY:-}
+      BALLDONTLIE_BASE_URL: ${BALLDONTLIE_BASE_URL:-https://api.balldontlie.io/v1}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
