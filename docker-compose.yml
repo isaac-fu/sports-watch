@@ -26,9 +26,38 @@ services:
       SPORTS_DATA_PROVIDER: ${SPORTS_DATA_PROVIDER:-mock}
       BALLDONTLIE_API_KEY: ${BALLDONTLIE_API_KEY:-}
       BALLDONTLIE_BASE_URL: ${BALLDONTLIE_BASE_URL:-https://api.balldontlie.io/v1}
+      NEWS_DATA_PROVIDER: ${NEWS_DATA_PROVIDER:-mock}
+      NEWS_API_KEY: ${NEWS_API_KEY:-}
+      NEWS_API_BASE_URL: ${NEWS_API_BASE_URL:-https://newsapi.org/v2}
+      STATS_DATA_PROVIDER: ${STATS_DATA_PROVIDER:-mock}
+      ALERT_WORKER_TOKEN: ${ALERT_WORKER_TOKEN:-local-worker-token}
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
     depends_on:
       db:
         condition: service_healthy
+    restart: unless-stopped
+  alert-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["node", "workers/alert-worker.mjs"]
+    environment:
+      ALERT_API_BASE_URL: http://web:3000
+      ALERT_POLL_INTERVAL_MS: ${ALERT_POLL_INTERVAL_MS:-30000}
+      ALERT_WORKER_TOKEN: ${ALERT_WORKER_TOKEN:-local-worker-token}
+    depends_on:
+      - web
+    restart: unless-stopped
+  data-sync-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["node", "workers/data-sync-worker.mjs"]
+    environment:
+      DATA_SYNC_API_BASE_URL: http://web:3000
+      DATA_SYNC_INTERVAL_MS: ${DATA_SYNC_INTERVAL_MS:-900000}
+    depends_on:
+      - web
     restart: unless-stopped
 
 volumes:

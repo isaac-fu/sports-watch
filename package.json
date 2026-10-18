@@ -6,6 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "alert-worker": "node workers/alert-worker.mjs",
+    "data-sync-worker": "node workers/data-sync-worker.mjs",
     "lint": "next lint"
   },
   "dependencies": {
