@@ -2,6 +2,7 @@ import type { Game, GameCenter, GameEvent } from "@/lib/models";
 import { getNbaProvider } from "@/lib/providers";
 import { mockProvider } from "@/lib/providers/mock-provider";
 import type { NbaProvider } from "@/lib/providers/types";
+import { loadCatalog } from "@/lib/catalog-repository";
 
 const parseClockSeconds = (clock: string) => {
   const match = /^(\d+):(\d{2})$/.exec(clock);
@@ -50,6 +51,7 @@ async function loadFromProvider(provider: NbaProvider, gameId: string) {
 }
 
 export async function getGameCenter(gameId: string): Promise<GameCenter | null> {
+  await loadCatalog();
   const configuredProvider = getNbaProvider();
   let provider = configuredProvider;
   let loaded;

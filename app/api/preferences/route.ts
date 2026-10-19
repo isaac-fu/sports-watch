@@ -1,4 +1,5 @@
-import { mockPlayers, mockTeams } from "@/lib/mock-repository";
+import { playerIds, teamIds } from "@/lib/catalog";
+import { loadCatalog } from "@/lib/catalog-repository";
 import type { AlertPreferences, Preferences } from "@/lib/models";
 import { getCurrentPreferences, updateCurrentPreferences } from "@/lib/preferences-repository";
 import { getAccountContext } from "@/lib/auth-session";
@@ -13,8 +14,9 @@ export async function GET(request: Request) {
 export async function PATCH(request: Request) {
   const context = await getAccountContext(request);
   const body = await request.json() as Partial<Preferences>;
-  const validTeamIds = new Set(mockTeams.map((team) => team.id));
-  const validPlayerIds = new Set(mockPlayers.map((player) => player.id));
+  await loadCatalog();
+  const validTeamIds = teamIds();
+  const validPlayerIds = playerIds();
 
   if (body.followedTeamIds && (!Array.isArray(body.followedTeamIds) || body.followedTeamIds.some((id) => !validTeamIds.has(id)))) return Response.json({ error: "One or more followedTeamIds are invalid." }, { status: 400 });
   if (body.followedPlayerIds && (!Array.isArray(body.followedPlayerIds) || body.followedPlayerIds.some((id) => !validPlayerIds.has(id)))) return Response.json({ error: "One or more followedPlayerIds are invalid." }, { status: 400 });

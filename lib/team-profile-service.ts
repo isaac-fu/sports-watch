@@ -1,7 +1,9 @@
 import type { TeamProfile, TeamStat } from "./models";
+import { canonicalPlayers, canonicalTeams } from "./catalog";
+import { loadCatalog } from "./catalog-repository";
 import { loadNewsArticles, loadSeasonStats } from "./content-repository";
-import { getGames, mockPlayers, mockTeams } from "./mock-repository";
-import { getNbaProvider } from "./providers";
+import { getGames } from "./mock-repository";
+import { getNbaProvider, getStatsProvider } from "./providers";
 import { currentNbaSeasonStart, nbaSeasonLabel } from "./season";
 
 type CachedTeamProfile = { profile: TeamProfile; expiresAt: number };
@@ -14,7 +16,7 @@ const dateKey = (date: Date) => date.toISOString().slice(0, 10);
 
 function fallbackStats(teamId: string, teamName: string, record: string): TeamStat {
   const [wins = 0, losses = 0] = record.split(/[–-]/).map(Number);
-  const index = Math.max(0, mockTeams.findIndex((team) => team.id === teamId));
+  const index = Math.max(0, canonicalTeams.findIndex((team) => team.id === teamId));
   return {
     teamId,
     teamName,
@@ -27,7 +29,8 @@ function fallbackStats(teamId: string, teamName: string, record: string): TeamSt
 }
 
 export async function getTeamProfile(teamId: string): Promise<TeamProfile | null> {
-  const team = mockTeams.find((item) => item.id === teamId);
+  await loadCatalog();
+  const team = canonicalTeams.find((item) => item.id === teamId);
   if (!team) return null;
 
   const cached = teamProfileCache.get(teamId);
@@ -35,27 +38,32 @@ export async function getTeamProfile(teamId: string): Promise<TeamProfile | null
 
   const season = currentNbaSeasonStart();
   const provider = getNbaProvider();
+  const statsProvider = getStatsProvider();
   const from = new Date();
   from.setDate(from.getDate() - 45);
   const to = new Date();
   to.setDate(to.getDate() + 180);
 
-  const [statsSnapshot, newsSnapshot, providerGames] = await Promise.all([
+  const [statsSnapshot, newsSnapshot, gamesSnapshot, providerStats] = await Promise.all([
     loadSeasonStats(season),
     loadNewsArticles(),
-    provider.getGames({ teamId, from: dateKey(from), to: dateKey(to) }).catch(() => getGames({ teamId, from: dateKey(from), to: dateKey(to) })),
+    provider.getGames({ teamId, from: dateKey(from), to: dateKey(to) })
+      .then((games) => ({ games, source: provider.name }))
+      .catch(() => ({ games: getGames({ teamId, from: dateKey(from), to: dateKey(to) }), source: "mock-repository" })),
+    statsProvider.getTeamStats(team, season).catch(() => null),
   ]);
-  const games = providerGames.filter((game) => game.home.id === teamId || game.away.id === teamId);
-  const stats = statsSnapshot.teams.find((item) => item.teamId === teamId) ?? fallbackStats(team.id, team.name, team.record);
+  const games = gamesSnapshot.games.filter((game) => game.home.id === teamId || game.away.id === teamId);
+  const stats = providerStats ?? statsSnapshot.teams.find((item) => item.teamId === teamId) ?? fallbackStats(team.id, team.name, team.record);
+  const source = Array.from(new Set([gamesSnapshot.source, providerStats ? statsProvider.name : statsSnapshot.source])).join(" + ");
   const profile: TeamProfile = {
     team,
-    seasonLabel: nbaSeasonLabel(season),
+    seasonLabel: nbaSeasonLabel(stats.season ?? season),
     stats,
-    roster: mockPlayers.filter((player) => player.teamId === teamId),
+    roster: canonicalPlayers.filter((player) => player.teamId === teamId),
     recentGames: games.filter((game) => game.status === "final").sort((left, right) => right.date.localeCompare(left.date)).slice(0, 5),
     upcomingGames: games.filter((game) => game.status !== "final").sort((left, right) => left.date.localeCompare(right.date)).slice(0, 5),
     articles: newsSnapshot.articles.filter((article) => article.teamIds.includes(teamId)).slice(0, 5),
-    source: provider.name === "mock-repository" ? "mock-repository" : `${provider.name} + ${statsSnapshot.source}`,
+    source,
     updatedAt: new Date().toISOString(),
   };
   teamProfileCache.set(teamId, { profile, expiresAt: Date.now() + cacheDurationMs });

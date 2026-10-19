@@ -1,10 +1,11 @@
-import { mockPlayers, mockTeams } from "@/lib/mock-repository";
+import { loadCatalog } from "@/lib/catalog-repository";
 
 export const dynamic = "force-dynamic";
 
-export function GET() {
+export async function GET() {
+  const catalog = await loadCatalog();
   return Response.json({
-    data: { teams: mockTeams, players: mockPlayers },
-    meta: { teamCount: mockTeams.length, playerCount: mockPlayers.length, source: "mock-repository" },
+    data: { teams: catalog.teams, players: catalog.players },
+    meta: { teamCount: catalog.teams.length, playerCount: catalog.players.length, source: catalog.source, syncedAt: catalog.syncedAt },
   });
 }

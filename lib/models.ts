@@ -4,6 +4,8 @@ export type Team = {
   short: string;
   color: string;
   record: string;
+  imageUrl?: string;
+  providerIds?: Record<string, string>;
 };
 
 export type Player = {
@@ -14,12 +16,15 @@ export type Player = {
   position: string;
   initials: string;
   color: string;
+  imageUrl?: string;
+  providerIds?: Record<string, string>;
 };
 
 export type Game = {
   id: string;
   date: string;
   time: string;
+  startsAt?: string;
   network: string;
   venue: string;
   status: "scheduled" | "live" | "final";
@@ -144,6 +149,7 @@ export type PlayerGameLog = {
   id: string;
   gameId: string;
   date: string;
+  season: number;
   opponentName: string;
   opponentShort: string;
   homeAway: "home" | "away";
@@ -175,6 +181,7 @@ export type PlayerProfile = {
 export type TeamStat = {
   teamId: string;
   teamName: string;
+  season?: number;
   wins: number;
   losses: number;
   conferenceRank: number;
@@ -211,7 +218,7 @@ export type SavedArticle = NewsArticle & {
   savedAt: string;
 };
 
-export type SyncDomain = "news" | "stats";
+export type SyncDomain = "catalog" | "news" | "stats";
 
 export type SyncResult = {
   domain: SyncDomain;

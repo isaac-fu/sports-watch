@@ -111,6 +111,34 @@ CREATE TABLE IF NOT EXISTS team_season_stats (
   PRIMARY KEY (season, team_id)
 );
 
+CREATE TABLE IF NOT EXISTS canonical_teams (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  short TEXT NOT NULL UNIQUE,
+  color TEXT NOT NULL,
+  record TEXT NOT NULL DEFAULT '—',
+  image_url TEXT,
+  provider_ids JSONB NOT NULL DEFAULT '{}'::jsonb,
+  provider TEXT NOT NULL,
+  synced_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS canonical_players (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  team_id TEXT NOT NULL,
+  team_name TEXT NOT NULL,
+  position TEXT NOT NULL,
+  initials TEXT NOT NULL,
+  color TEXT NOT NULL,
+  image_url TEXT,
+  provider_ids JSONB NOT NULL DEFAULT '{}'::jsonb,
+  provider TEXT NOT NULL,
+  synced_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS canonical_players_team_id_idx ON canonical_players (team_id);
+
 CREATE TABLE IF NOT EXISTS data_sync_runs (
   id BIGSERIAL PRIMARY KEY,
   domain TEXT NOT NULL,

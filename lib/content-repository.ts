@@ -178,7 +178,7 @@ export async function loadSeasonStats(season: number): Promise<StatsSnapshot> {
         const first = playerRows.rows[0] ?? teamRows.rows[0];
         return {
           players: playerRows.rows.map((row) => ({ playerId: row.player_id, playerName: row.player_name, teamId: row.team_id, teamName: row.team_name, gamesPlayed: row.games_played, pointsPerGame: row.points_per_game, reboundsPerGame: row.rebounds_per_game, assistsPerGame: row.assists_per_game, fieldGoalPercentage: row.field_goal_percentage, threePointPercentage: row.three_point_percentage })),
-          teams: teamRows.rows.map((row) => ({ teamId: row.team_id, teamName: row.team_name, wins: row.wins, losses: row.losses, conferenceRank: row.conference_rank, pointsPerGame: row.points_per_game, pointsAllowedPerGame: row.points_allowed_per_game })),
+          teams: teamRows.rows.map((row) => ({ teamId: row.team_id, teamName: row.team_name, season: row.season, wins: row.wins, losses: row.losses, conferenceRank: row.conference_rank, pointsPerGame: row.points_per_game, pointsAllowedPerGame: row.points_allowed_per_game })),
           source: first.provider,
           syncedAt: new Date(first.synced_at).toISOString(),
         };

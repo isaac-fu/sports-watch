@@ -1,8 +1,10 @@
-import { mockTeams } from "@/lib/mock-repository";
+import { canonicalTeams, findTeamByProviderId, mergeProviderId, type ProviderCatalog } from "@/lib/catalog";
 import type { Game, GameEvent, GameEventType, Team } from "@/lib/models";
-import type { GameFilters, NbaProvider } from "./types";
+import { formatPacificTipTime, pacificDateKey } from "@/lib/game-time";
+import type { CatalogProvider, GameFilters, NbaProvider } from "./types";
 
 type BdlTeam = { id: number; abbreviation: string; full_name?: string; name?: string; city?: string };
+type BdlPlayer = { id: number; first_name: string; last_name: string; position?: string; team: BdlTeam };
 type BdlGame = {
   id: number;
   date: string;
@@ -36,16 +38,17 @@ type BdlPlay = {
   participants?: number[];
 };
 
-type BdlResponse<T> = { data: T[] };
+type BdlResponse<T> = { data: T[]; meta?: { next_cursor?: number | string | null } };
 type BdlSingleResponse<T> = { data: T };
 
 const todayKey = () => new Date().toISOString().slice(0, 10);
 const addDaysKey = (amount: number) => { const date = new Date(); date.setDate(date.getDate() + amount); return date.toISOString().slice(0, 10); };
 
 function mapTeam(team: BdlTeam): Team {
-  const knownTeam = mockTeams.find((candidate) => candidate.short === team.abbreviation);
-  if (knownTeam) return knownTeam;
-  return { id: `bdl-${team.id}`, name: team.full_name ?? `${team.city ?? ""} ${team.name ?? team.abbreviation}`.trim(), short: team.abbreviation, color: "#777b75", record: "—" };
+  const providerId = String(team.id);
+  const knownTeam = findTeamByProviderId("balldontlie", providerId) ?? canonicalTeams.find((candidate) => candidate.short === team.abbreviation);
+  if (knownTeam) return mergeProviderId(knownTeam, "balldontlie", providerId);
+  return { id: `bdl-${team.id}`, name: team.full_name ?? `${team.city ?? ""} ${team.name ?? team.abbreviation}`.trim(), short: team.abbreviation, color: "#777b75", record: "—", providerIds: { balldontlie: providerId } };
 }
 
 function mapStatus(game: BdlGame): Game["status"] {
@@ -56,9 +59,11 @@ function mapStatus(game: BdlGame): Game["status"] {
 
 function mapGame(game: BdlGame): Game {
   const start = game.datetime ? new Date(game.datetime) : null;
-  const date = start && !Number.isNaN(start.getTime()) ? start.toISOString().slice(0, 10) : game.date;
-  const time = game.time && !["Final", "TBD"].includes(game.time) ? game.time : start && !Number.isNaN(start.getTime()) ? start.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : "TBD";
-  return { id: `bdl-${game.id}`, date, time, network: "NBA", venue: game.venue ?? "NBA arena", status: mapStatus(game), homeScore: game.home_team_score, awayScore: game.visitor_team_score, period: game.period, clock: game.status_state === "in_progress" ? game.time : undefined, updatedAt: new Date().toISOString(), home: mapTeam(game.home_team), away: mapTeam(game.visitor_team) };
+  const startsAt = start && !Number.isNaN(start.getTime()) ? start.toISOString() : undefined;
+  const date = pacificDateKey(startsAt, game.date);
+  const providerTime = game.time && !["Final", "TBD"].includes(game.time) ? game.time : "TBD";
+  const time = formatPacificTipTime(startsAt, providerTime);
+  return { id: `bdl-${game.id}`, date, time, startsAt, network: "NBA", venue: game.venue ?? "NBA arena", status: mapStatus(game), homeScore: game.home_team_score, awayScore: game.visitor_team_score, period: game.period, clock: game.status_state === "in_progress" ? game.time : undefined, updatedAt: new Date().toISOString(), home: mapTeam(game.home_team), away: mapTeam(game.visitor_team) };
 }
 
 function classifyPlay(play: BdlPlay): GameEventType {
@@ -112,7 +117,7 @@ function providerGameId(gameId: string) {
   return match ? match[1] : null;
 }
 
-export class BallDontLieProvider implements NbaProvider {
+export class BallDontLieProvider implements NbaProvider, CatalogProvider {
   readonly name = "balldontlie";
   private readonly apiKey: string;
   private readonly baseUrl: string;
@@ -120,6 +125,48 @@ export class BallDontLieProvider implements NbaProvider {
   constructor(apiKey: string, baseUrl = "https://api.balldontlie.io/v1") {
     this.apiKey = apiKey;
     this.baseUrl = baseUrl.replace(/\/$/, "");
+  }
+
+  private async getCollection<T>(path: string, paginated = false): Promise<T[]> {
+    const items: T[] = [];
+    let cursor: string | null = null;
+    const seenCursors = new Set<string>();
+    do {
+      const params = new URLSearchParams();
+      if (paginated) params.set("per_page", "100");
+      if (cursor) params.set("cursor", cursor);
+      const query = params.size > 0 ? `?${params.toString()}` : "";
+      const response = await fetch(`${this.baseUrl}${path}${query}`, { headers: { Authorization: this.apiKey }, cache: "no-store" });
+      if (!response.ok) throw new Error(`BALLDONTLIE ${path} request failed with ${response.status}`);
+      const payload = await response.json() as BdlResponse<T>;
+      items.push(...payload.data);
+      const nextCursor = payload.meta?.next_cursor;
+      cursor = nextCursor === undefined || nextCursor === null ? null : String(nextCursor);
+      if (cursor && seenCursors.has(cursor)) throw new Error(`BALLDONTLIE ${path} returned a repeated cursor.`);
+      if (cursor) seenCursors.add(cursor);
+      if (seenCursors.size > 20) throw new Error(`BALLDONTLIE ${path} exceeded the catalog page limit.`);
+    } while (cursor);
+    return items;
+  }
+
+  async getCatalogIdentities(): Promise<ProviderCatalog> {
+    const [teams, players] = await Promise.all([
+      this.getCollection<BdlTeam>("/teams"),
+      this.getCollection<BdlPlayer>("/players/active", true),
+    ]);
+    return {
+      teams: teams.map((team) => ({
+        providerId: String(team.id),
+        name: team.full_name ?? `${team.city ?? ""} ${team.name ?? team.abbreviation}`.trim(),
+        short: team.abbreviation,
+      })),
+      players: players.map((player) => ({
+        providerId: String(player.id),
+        name: `${player.first_name} ${player.last_name}`.trim(),
+        position: player.position ?? "",
+        teamProviderId: String(player.team.id),
+      })),
+    };
   }
 
   async getGames(filters: GameFilters = {}) {

@@ -1,5 +1,6 @@
 import type { PlayerProfile } from "./models";
-import { mockPlayers } from "./mock-repository";
+import { canonicalPlayers } from "./catalog";
+import { loadCatalog } from "./catalog-repository";
 import { getStatsProvider } from "./providers";
 import { mockStatsProvider } from "./providers/stats-provider";
 import { currentNbaSeasonStart } from "./season";
@@ -12,7 +13,8 @@ const profileCache = globalThis.__courtsidePlayerProfiles ?? (globalThis.__court
 const cacheDurationMs = 15 * 60 * 1000;
 
 export async function getPlayerProfile(playerId: string): Promise<PlayerProfile | null> {
-  const player = mockPlayers.find((item) => item.id === playerId);
+  await loadCatalog();
+  const player = canonicalPlayers.find((item) => item.id === playerId);
   if (!player) return null;
 
   const season = currentNbaSeasonStart();

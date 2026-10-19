@@ -6,6 +6,7 @@ import { getCatchUpBrief, selectCatchUpGame } from "@/lib/recommendations/servic
 import { loadNewsArticles } from "@/lib/content-repository";
 import { getAccountContext } from "@/lib/auth-session";
 import { getGameCenter } from "@/lib/game-center-service";
+import { loadCatalog } from "@/lib/catalog-repository";
 
 export const dynamic = "force-dynamic";
 
@@ -13,7 +14,7 @@ const toDateKey = (date: Date) => date.toISOString().slice(0, 10);
 
 export async function GET(request: Request) {
   const context = await getAccountContext(request);
-  const [preferences, news] = await Promise.all([getCurrentPreferences(context.accountId), loadNewsArticles()]);
+  const [preferences, news] = await Promise.all([getCurrentPreferences(context.accountId), loadNewsArticles(), loadCatalog()]);
   const yesterday = new Date();
   yesterday.setDate(yesterday.getDate() - 1);
   let games: Game[];

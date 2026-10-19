@@ -25,13 +25,18 @@ profile.cov
 node_modules/
 .next/
 out/
+*.tsbuildinfo
+__pycache__/
+*.py[cod]
+.pytest_cache/
 
 # Go workspace file
 go.work
 go.work.sum
 
-# env file
-.env
+# Environment files may contain provider keys and worker secrets.
+.env*
+!.env.example
 
 # Editor/IDE
 # .idea/

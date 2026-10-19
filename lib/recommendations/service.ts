@@ -1,14 +1,15 @@
 import type { CatchUpBrief, Game, GameCenter, NewsArticle, Preferences } from "@/lib/models";
-import { mockNews, mockPlayers, mockTeams } from "@/lib/mock-repository";
+import { canonicalPlayers, canonicalTeams } from "@/lib/catalog";
+import { mockNews } from "@/lib/mock-repository";
 import { generateAlertCandidates, generateGameCandidates, generateGameEventCandidates, generateNewsCandidates, generatePlayerCandidates, generateTeamCandidates } from "./candidate-generators";
 import { rankAlertCandidates, rankCatchUpCandidates, rankGameCandidates, rankGameEventCandidates, rankNewsCandidates, rankPlayerCandidates, rankTeamCandidates } from "./rankers";
 
 export function getPersonalizedFeed(preferences: Preferences, articles: NewsArticle[] = mockNews) {
-  return rankNewsCandidates(generateNewsCandidates(articles, mockTeams, mockPlayers, preferences));
+  return rankNewsCandidates(generateNewsCandidates(articles, canonicalTeams, canonicalPlayers, preferences));
 }
 
 export function getDiscoveryRecommendations(preferences: Preferences, games: Game[], articles: NewsArticle[] = mockNews) {
-  const inputs = { teams: mockTeams, players: mockPlayers, articles, games };
+  const inputs = { teams: canonicalTeams, players: canonicalPlayers, articles, games };
   const coldStart = preferences.followedTeamIds.length === 0 && preferences.followedPlayerIds.length === 0;
   return {
     teams: rankTeamCandidates(generateTeamCandidates(inputs, preferences)),
@@ -21,7 +22,7 @@ const gameRecency = (game: Game) => game.updatedAt ?? `${game.date}T23:59:59.000
 
 export function selectCatchUpGame(preferences: Preferences, games: Game[]) {
   const coldStart = preferences.followedTeamIds.length === 0 && preferences.followedPlayerIds.length === 0;
-  const followedPlayerTeamIds = new Set(mockPlayers.filter((player) => preferences.followedPlayerIds.includes(player.id)).map((player) => player.teamId));
+  const followedPlayerTeamIds = new Set(canonicalPlayers.filter((player) => preferences.followedPlayerIds.includes(player.id)).map((player) => player.teamId));
   const followsGame = (game: Game) => preferences.followedTeamIds.includes(game.home.id)
     || preferences.followedTeamIds.includes(game.away.id)
     || followedPlayerTeamIds.has(game.home.id)
@@ -37,13 +38,13 @@ export function getCatchUpBrief(preferences: Preferences, games: Game[], article
   const eventMoments = gameCenter && relevantGame?.id === gameCenter.game.id
     ? rankGameEventCandidates(generateGameEventCandidates(gameCenter, preferences))
     : [];
-  const newsMoments = rankCatchUpCandidates(generateNewsCandidates(articles, mockTeams, mockPlayers, preferences));
+  const newsMoments = rankCatchUpCandidates(generateNewsCandidates(articles, canonicalTeams, canonicalPlayers, preferences));
   const moments = eventMoments.length > 0 ? eventMoments : newsMoments;
   const source: CatchUpBrief["source"] = eventMoments.length > 0 ? "play-by-play" : "news";
-  const followedPlayerTeamIds = new Set(mockPlayers.filter((player) => preferences.followedPlayerIds.includes(player.id)).map((player) => player.teamId));
+  const followedPlayerTeamIds = new Set(canonicalPlayers.filter((player) => preferences.followedPlayerIds.includes(player.id)).map((player) => player.teamId));
   const focusTeam = !coldStart && relevantGame
     ? [relevantGame.home, relevantGame.away].find((team) => preferences.followedTeamIds.includes(team.id) || followedPlayerTeamIds.has(team.id))
-    : !coldStart ? mockTeams.find((team) => preferences.followedTeamIds.includes(team.id) || followedPlayerTeamIds.has(team.id)) : undefined;
+    : !coldStart ? canonicalTeams.find((team) => preferences.followedTeamIds.includes(team.id) || followedPlayerTeamIds.has(team.id)) : undefined;
 
   let lede = moments.length > 0 ? moments[0].detail : "There are no significant updates for your favorites yet.";
   if (relevantGame?.homeScore !== undefined && relevantGame.awayScore !== undefined) {

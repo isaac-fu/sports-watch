@@ -1,6 +1,7 @@
 import { completeAccountOnboarding } from "@/lib/auth-repository";
 import { getAccountContext } from "@/lib/auth-session";
-import { mockPlayers, mockTeams } from "@/lib/mock-repository";
+import { playerIds as canonicalPlayerIds, teamIds as canonicalTeamIds } from "@/lib/catalog";
+import { loadCatalog } from "@/lib/catalog-repository";
 import type { AlertPreferences, Preferences } from "@/lib/models";
 import { cachePreferences } from "@/lib/preferences-repository";
 
@@ -16,8 +17,9 @@ export async function POST(request: Request) {
   const teamIds = body?.followedTeamIds;
   const playerIds = body?.followedPlayerIds;
   const alerts = body?.alerts;
-  const validTeamIds = new Set(mockTeams.map((team) => team.id));
-  const validPlayerIds = new Set(mockPlayers.map((player) => player.id));
+  await loadCatalog();
+  const validTeamIds = canonicalTeamIds();
+  const validPlayerIds = canonicalPlayerIds();
 
   if (!Array.isArray(teamIds) || teamIds.some((id) => typeof id !== "string" || !validTeamIds.has(id))) return Response.json({ error: "One or more selected teams are invalid." }, { status: 400 });
   if (!Array.isArray(playerIds) || playerIds.some((id) => typeof id !== "string" || !validPlayerIds.has(id))) return Response.json({ error: "One or more selected players are invalid." }, { status: 400 });

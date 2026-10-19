@@ -8,7 +8,9 @@
     "start": "next start",
     "alert-worker": "node workers/alert-worker.mjs",
     "data-sync-worker": "node workers/data-sync-worker.mjs",
-    "lint": "next lint"
+    "lint": "eslint . --max-warnings=0",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@types/pg": "^8.23.1",
@@ -21,6 +23,9 @@
     "@types/node": "22.7.5",
     "@types/react": "18.3.3",
     "@types/react-dom": "18.3.0",
-    "typescript": "5.6.2"
+    "eslint": "^8.57.1",
+    "eslint-config-next": "^14.2.35",
+    "typescript": "5.6.2",
+    "vitest": "^2.1.8"
   }
 }

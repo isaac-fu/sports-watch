@@ -1,5 +1,6 @@
 import type { AlertCandidate, Game, GameCenter, NewsArticle, Player, Preferences, Team } from "@/lib/models";
-import { mockPlayers } from "@/lib/mock-repository";
+import { canonicalPlayers } from "@/lib/catalog";
+import { formatPacificTipTime, scheduledGameTimestamp } from "@/lib/game-time";
 import type { GameCandidate, GameEventCandidate, NewsCandidate, PlayerCandidate, RecommendationInputs, TeamCandidate } from "./types";
 
 const nationallyVisible = (game: Game) => ["ABC", "ESPN", "TNT", "NBA TV"].includes(game.network.toUpperCase());
@@ -110,7 +111,7 @@ function clockSeconds(clock: string) {
 
 export function generateAlertCandidates(games: Game[], articles: NewsArticle[], preferences: Preferences, gameCenters: GameCenter[] = []): AlertCandidate[] {
   const candidates: AlertCandidate[] = [];
-  const followedPlayerTeamIds = new Set(mockPlayers
+  const followedPlayerTeamIds = new Set(canonicalPlayers
     .filter((player) => preferences.followedPlayerIds.includes(player.id))
     .map((player) => player.teamId));
   const relevantGame = (game: Game) => preferences.followedTeamIds.includes(game.home.id)
@@ -127,10 +128,10 @@ export function generateAlertCandidates(games: Game[], articles: NewsArticle[], 
       candidates.push({ candidateId: `final:${game.id}`, type: "finalScore", title: `Final: ${game.away.short} ${game.awayScore}, ${game.home.short} ${game.homeScore}`, body: `${game.home.name} and ${game.away.name} have finished at ${game.venue}.`, priority: 85, occurredAt: game.updatedAt ?? `${game.date}T23:59:00.000Z`, gameId: game.id, teamIds: [game.home.id, game.away.id], playerIds: [] });
     }
     if (preferences.alerts.gameStarting && game.status === "scheduled") {
-      const start = new Date(`${game.date} ${game.time}`);
-      const minutesUntilStart = (start.getTime() - Date.now()) / 60_000;
+      const start = scheduledGameTimestamp(game);
+      const minutesUntilStart = (start - Date.now()) / 60_000;
       if (!Number.isNaN(minutesUntilStart) && minutesUntilStart >= 0 && minutesUntilStart <= 30) {
-        candidates.push({ candidateId: `starting:${game.id}`, type: "gameStarting", title: `${game.away.short} at ${game.home.short} starts soon`, body: `Tip-off is at ${game.time} on ${game.network}.`, priority: 90, occurredAt: new Date().toISOString(), gameId: game.id, teamIds: [game.home.id, game.away.id], playerIds: [] });
+        candidates.push({ candidateId: `starting:${game.id}`, type: "gameStarting", title: `${game.away.short} at ${game.home.short} starts soon`, body: `Tip-off is at ${formatPacificTipTime(game.startsAt, game.time)} on ${game.network}.`, priority: 90, occurredAt: new Date().toISOString(), gameId: game.id, teamIds: [game.home.id, game.away.id], playerIds: [] });
       }
     }
   }

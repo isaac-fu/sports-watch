@@ -7,6 +7,7 @@ import { getRankedAlertCandidates } from "./recommendations/service";
 import { loadNewsArticles } from "./content-repository";
 import { listAccountIds } from "./auth-repository";
 import { getGameCenter } from "./game-center-service";
+import { loadCatalog } from "./catalog-repository";
 
 const toDateKey = (date: Date) => date.toISOString().slice(0, 10);
 
@@ -32,6 +33,7 @@ async function loadLiveGameCenters(games: Game[]): Promise<GameCenter[]> {
 }
 
 export async function processAccountAlerts(accountId: string) {
+  await loadCatalog();
   const [preferences, games, news] = await Promise.all([getCurrentPreferences(accountId), loadAlertWindowGames(), loadNewsArticles()]);
   const gameCenters = await loadLiveGameCenters(games);
   const candidates = getRankedAlertCandidates(preferences, games, news.articles, gameCenters);
@@ -40,6 +42,7 @@ export async function processAccountAlerts(accountId: string) {
 }
 
 export async function processAllAccountAlerts() {
+  await loadCatalog();
   const [accountIds, games, news] = await Promise.all([listAccountIds(), loadAlertWindowGames(), loadNewsArticles()]);
   const gameCenters = await loadLiveGameCenters(games);
   const results = await Promise.all(accountIds.map(async (accountId) => {

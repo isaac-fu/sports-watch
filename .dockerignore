@@ -5,3 +5,5 @@ out
 .gitignore
 npm-debug.log*
 README.md
+nba-api-service/__pycache__
+nba-api-service/.pytest_cache

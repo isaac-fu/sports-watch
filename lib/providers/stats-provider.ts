@@ -1,5 +1,6 @@
-import type { Player, PlayerBio, PlayerCareerStat, PlayerGameLog, PlayerProfile, PlayerSeasonStat, PlayerStat, TeamStat } from "@/lib/models";
-import { mockPlayers, mockPlayerStats, mockTeams, mockTeamStats } from "@/lib/mock-repository";
+import type { Player, PlayerBio, PlayerCareerStat, PlayerGameLog, PlayerProfile, PlayerSeasonStat, PlayerStat, Team, TeamStat } from "@/lib/models";
+import { canonicalPlayers, canonicalTeams } from "@/lib/catalog";
+import { mockPlayerStats, mockTeamStats } from "@/lib/mock-repository";
 import { nbaSeasonLabel } from "@/lib/season";
 
 export type SeasonStats = { players: PlayerStat[]; teams: TeamStat[] };
@@ -8,6 +9,7 @@ export interface StatsProvider {
   readonly name: string;
   getSeasonStats(season: number): Promise<SeasonStats>;
   getPlayerProfile(player: Player, season: number): Promise<PlayerProfile>;
+  getTeamStats(team: Team, season: number): Promise<TeamStat | null>;
 }
 
 type BdlTeam = { id: number; full_name?: string; abbreviation?: string };
@@ -28,11 +30,14 @@ type BdlPlayer = {
   team_id?: number;
 };
 type BdlPlayerResponse = { data?: BdlPlayer[] };
+type BdlSinglePlayerResponse = { data?: BdlPlayer };
 type BdlAverage = { player?: BdlPlayer; team?: BdlTeam; stats?: Record<string, unknown> } & Record<string, unknown>;
-type BdlAveragesResponse = { data?: BdlAverage[] };
+type BdlMeta = { next_cursor?: number | string | null };
+type BdlAveragesResponse = { data?: BdlAverage[]; meta?: BdlMeta };
 type BdlGame = {
   id: number;
   date?: string;
+  season?: number;
   home_team_id?: number;
   visitor_team_id?: number;
   home_team_score?: number;
@@ -58,7 +63,8 @@ type BdlGameStat = {
   team?: BdlTeam;
   game?: BdlGame;
 };
-type BdlStatsResponse = { data?: BdlGameStat[] };
+type BdlStanding = { team: BdlTeam; conference_rank?: number; wins?: number; losses?: number };
+type BdlStandingsResponse = { data?: BdlStanding[]; meta?: BdlMeta };
 
 const numberFrom = (record: Record<string, unknown>, ...keys: string[]) => {
   for (const key of keys) {
@@ -115,8 +121,16 @@ function careerFromSeasons(seasons: PlayerSeasonStat[]): PlayerCareerStat | null
   };
 }
 
+const chunksOf = <T,>(items: T[], size: number) => Array.from({ length: Math.ceil(items.length / size) }, (_, index) => items.slice(index * size, (index + 1) * size));
+
+function providerId(value?: string) {
+  if (!value) return null;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) ? parsed : null;
+}
+
 function mockPlayerProfile(player: Player, season: number): PlayerProfile {
-  const index = Math.max(0, mockPlayers.findIndex((item) => item.id === player.id));
+  const index = Math.max(0, canonicalPlayers.findIndex((item) => item.id === player.id));
   const draftYears: Record<string, number> = { "stephen-curry": 2009, "jonathan-kuminga": 2021, "draymond-green": 2012, "jalen-brunson": 2018, "shai-gilgeous-alexander": 2018, "lebron-james": 2003, "jayson-tatum": 2017, "kevin-durant": 2007, "nikola-jokic": 2014, "luka-doncic": 2018, "bam-adebayo": 2017, "domantas-sabonis": 2016 };
   const bioByPlayer: Record<string, PlayerBio> = {
     "stephen-curry": { height: "6-2", weight: "185", jerseyNumber: "30", college: "Davidson", country: "USA", draftYear: 2009, draftRound: 1, draftNumber: 7 },
@@ -152,7 +166,7 @@ function mockPlayerProfile(player: Player, season: number): PlayerProfile {
       threePointPercentage: rounded(threePoint - Math.max(0, offset - 8) * .12),
     } satisfies PlayerSeasonStat;
   });
-  const opponents = mockTeams.filter((team) => team.id !== player.teamId);
+  const opponents = canonicalTeams.filter((team) => team.id !== player.teamId);
   const lastTenGames = Array.from({ length: 10 }, (_, gameIndex) => {
     const opponent = opponents[(index + gameIndex) % opponents.length];
     const date = new Date();
@@ -165,6 +179,7 @@ function mockPlayerProfile(player: Player, season: number): PlayerProfile {
       id: `mock-${player.id}-${gameIndex}`,
       gameId: `mock-profile-game-${player.id}-${gameIndex}`,
       date: date.toISOString().slice(0, 10),
+      season,
       opponentName: opponent.name,
       opponentShort: opponent.short,
       homeAway: gameIndex % 2 === 0 ? "home" : "away",
@@ -205,10 +220,41 @@ export class BallDontLieStatsProvider implements StatsProvider {
     return response.json() as Promise<T>;
   }
 
+  private async requestAll<T>(path: string, baseParams: URLSearchParams) {
+    const items: T[] = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | null = null;
+    do {
+      const params = new URLSearchParams(baseParams);
+      if (cursor) params.set("cursor", cursor);
+      const payload = await this.request<{ data?: T[]; meta?: BdlMeta }>(`${path}?${params}`);
+      items.push(...(payload.data ?? []));
+      const nextCursor = payload.meta?.next_cursor;
+      cursor = nextCursor === undefined || nextCursor === null ? null : String(nextCursor);
+      if (cursor && seenCursors.has(cursor)) throw new Error(`BALLDONTLIE ${path} returned a repeated cursor.`);
+      if (cursor) seenCursors.add(cursor);
+      if (seenCursors.size > 20) throw new Error(`BALLDONTLIE ${path} exceeded the page limit.`);
+    } while (cursor);
+    return items;
+  }
+
   private async resolvePlayer(player: Player) {
+    const knownId = providerId(player.providerIds?.balldontlie);
+    if (knownId !== null) {
+      try {
+        const payload = await this.request<BdlSinglePlayerResponse>(`/players/${knownId}`);
+        if (payload.data) return payload.data;
+      } catch { /* fall through to name resolution for stale provider ids */ }
+    }
     const params = new URLSearchParams({ search: player.name, per_page: "25" });
     const payload = await this.request<BdlPlayerResponse>(`/players?${params}`);
     return payload.data?.find((candidate) => normalizedName(`${candidate.first_name ?? ""} ${candidate.last_name ?? ""}`.trim()) === normalizedName(player.name)) ?? null;
+  }
+
+  private async resolvePlayerId(player: Player) {
+    const knownId = providerId(player.providerIds?.balldontlie);
+    if (knownId !== null) return knownId;
+    return (await this.resolvePlayer(player))?.id ?? null;
   }
 
   private async getAverage(player: Player, providerId: number, season: number) {
@@ -219,16 +265,132 @@ export class BallDontLieStatsProvider implements StatsProvider {
     return average ? averageToSeason(player, season, average) : null;
   }
 
-  async getSeasonStats(season: number) {
-    const resolved = await Promise.all(mockPlayers.map(async (appPlayer) => {
-      const player = await this.resolvePlayer(appPlayer);
-      return player ? { appPlayer, providerId: player.id } : null;
+  private async getPlayerSeasonStats(season: number) {
+    const resolved = await Promise.all(canonicalPlayers.map(async (appPlayer) => {
+      const id = await this.resolvePlayerId(appPlayer);
+      return id === null ? null : { appPlayer, providerId: id };
     }));
     const matched = resolved.filter((entry): entry is NonNullable<typeof entry> => entry !== null);
-    if (matched.length === 0) throw new Error("BALLDONTLIE did not resolve any configured players.");
-    const players = (await Promise.all(matched.map(({ appPlayer, providerId }) => this.getAverage(appPlayer, providerId, season)))).filter((stat): stat is PlayerSeasonStat => stat !== null);
-    if (players.length === 0) throw new Error("BALLDONTLIE returned no season averages for configured players.");
-    return { players, teams: mockTeamStats };
+    const playerByProviderId = new Map(matched.map((entry) => [entry.providerId, entry.appPlayer]));
+    const stats: PlayerSeasonStat[] = [];
+    for (const batch of chunksOf(matched, 75)) {
+      const params = new URLSearchParams({ season: String(season), season_type: "regular", type: "base", per_page: "100" });
+      batch.forEach((entry) => params.append("player_ids[]", String(entry.providerId)));
+      const averages = await this.requestAll<BdlAverage>("/season_averages/general", params);
+      for (const average of averages) {
+        const id = average.player?.id;
+        const appPlayer = id === undefined ? (batch.length === 1 ? batch[0].appPlayer : null) : playerByProviderId.get(id);
+        if (appPlayer) stats.push(averageToSeason(appPlayer, season, average));
+      }
+    }
+    return stats;
+  }
+
+  private canonicalTeam(team: BdlTeam) {
+    return canonicalTeams.find((candidate) => candidate.providerIds?.balldontlie === String(team.id))
+      ?? canonicalTeams.find((candidate) => candidate.short === team.abbreviation)
+      ?? null;
+  }
+
+  private async resolveTeamId(team: Team) {
+    const knownId = providerId(team.providerIds?.balldontlie);
+    if (knownId !== null) return knownId;
+    const payload = await this.request<{ data?: BdlTeam[] }>("/teams");
+    return payload.data?.find((candidate) => candidate.abbreviation === team.short)?.id ?? null;
+  }
+
+  private async getTeamSeasonStats(season: number, onlyTeamIds: number[] = []) {
+    const paramsFor = (type: string) => {
+      const params = new URLSearchParams({ season: String(season), season_type: "regular", type, per_page: "100" });
+      onlyTeamIds.forEach((id) => params.append("team_ids[]", String(id)));
+      return params;
+    };
+    const [baseRows, opponentRows, standingsPayload] = await Promise.all([
+      this.requestAll<BdlAverage>("/team_season_averages/general", paramsFor("base")),
+      this.requestAll<BdlAverage>("/team_season_averages/general", paramsFor("opponent")),
+      this.request<BdlStandingsResponse>(`/standings?${new URLSearchParams({ season: String(season) })}`),
+    ]);
+    const opponentByTeamId = new Map(opponentRows.flatMap((row) => row.team ? [[row.team.id, row]] : []));
+    const standingByTeamId = new Map((standingsPayload.data ?? []).map((standing) => [standing.team.id, standing]));
+    return baseRows.flatMap((base): TeamStat[] => {
+      if (!base.team) return [];
+      const appTeam = this.canonicalTeam(base.team);
+      const opponent = opponentByTeamId.get(base.team.id);
+      const standing = standingByTeamId.get(base.team.id);
+      if (!appTeam || !opponent || !standing) return [];
+      const baseStats = (base.stats && typeof base.stats === "object" ? base.stats : base) as Record<string, unknown>;
+      const opponentStats = (opponent.stats && typeof opponent.stats === "object" ? opponent.stats : opponent) as Record<string, unknown>;
+      return [{
+        teamId: appTeam.id,
+        teamName: base.team.full_name ?? appTeam.name,
+        season,
+        wins: standing.wins ?? numberFrom(baseStats, "w", "wins"),
+        losses: standing.losses ?? numberFrom(baseStats, "l", "losses"),
+        conferenceRank: standing.conference_rank ?? 0,
+        pointsPerGame: rounded(numberFrom(baseStats, "pts", "points")),
+        pointsAllowedPerGame: rounded(numberFrom(opponentStats, "pts", "opp_pts", "points")),
+      }];
+    });
+  }
+
+  private seasonForGame(game: BdlGame) {
+    if (game.season !== undefined) return game.season;
+    const date = game.date ? new Date(`${game.date.slice(0, 10)}T12:00:00Z`) : null;
+    if (!date || Number.isNaN(date.getTime())) return 0;
+    return date.getUTCMonth() >= 9 ? date.getUTCFullYear() : date.getUTCFullYear() - 1;
+  }
+
+  private async getLastTenGames(providerPlayer: BdlPlayer, season: number): Promise<PlayerGameLog[]> {
+    const params = new URLSearchParams({ per_page: "100", season_type: "regular" });
+    params.append("player_ids[]", String(providerPlayer.id));
+    params.append("seasons[]", String(season));
+    params.append("seasons[]", String(season - 1));
+    const rows = await this.requestAll<BdlGameStat>("/stats", params);
+    return rows.filter((stat) => stat.game).sort((left, right) => (right.game?.date ?? "").localeCompare(left.game?.date ?? "")).slice(0, 10).map((stat) => {
+      const game = stat.game!;
+      const playerTeamId = stat.team?.id ?? providerPlayer.team?.id ?? providerPlayer.team_id;
+      const isHome = playerTeamId === game.home_team_id;
+      const opponentProviderId = isHome ? game.visitor_team_id : game.home_team_id;
+      const nestedOpponent = isHome ? game.visitor_team : game.home_team;
+      const canonicalOpponent = canonicalTeams.find((team) => team.providerIds?.balldontlie === String(opponentProviderId));
+      const teamScore = isHome ? game.home_team_score ?? 0 : game.visitor_team_score ?? 0;
+      const opponentScore = isHome ? game.visitor_team_score ?? 0 : game.home_team_score ?? 0;
+      return {
+        id: `bdl-stat-${stat.id}`,
+        gameId: `bdl-${game.id}`,
+        date: game.date?.slice(0, 10) ?? "",
+        season: this.seasonForGame(game),
+        opponentName: nestedOpponent?.full_name ?? canonicalOpponent?.name ?? "Opponent",
+        opponentShort: nestedOpponent?.abbreviation ?? canonicalOpponent?.short ?? "OPP",
+        homeAway: isHome ? "home" : "away",
+        result: teamScore > opponentScore ? "W" : "L",
+        score: `${teamScore}-${opponentScore}`,
+        minutes: stat.min ?? "—",
+        points: stat.pts ?? 0,
+        rebounds: stat.reb ?? 0,
+        assists: stat.ast ?? 0,
+        steals: stat.stl ?? 0,
+        blocks: stat.blk ?? 0,
+        turnovers: stat.turnover ?? 0,
+        fieldGoals: `${stat.fgm ?? 0}-${stat.fga ?? 0}`,
+        threePointers: `${stat.fg3m ?? 0}-${stat.fg3a ?? 0}`,
+        plusMinus: stat.plus_minus ?? 0,
+      };
+    });
+  }
+
+  async getSeasonStats(season: number) {
+    const [players, teams] = await Promise.all([this.getPlayerSeasonStats(season), this.getTeamSeasonStats(season)]);
+    if (players.length === 0 && teams.length === 0) throw new Error("BALLDONTLIE returned no season statistics.");
+    return { players, teams };
+  }
+
+  async getTeamStats(team: Team, season: number) {
+    const id = await this.resolveTeamId(team);
+    if (id === null) return null;
+    const current = await this.getTeamSeasonStats(season, [id]);
+    if (current[0]) return current[0];
+    return (await this.getTeamSeasonStats(season - 1, [id]))[0] ?? null;
   }
 
   async getPlayerProfile(player: Player, season: number): Promise<PlayerProfile> {
@@ -244,40 +406,7 @@ export class BallDontLieStatsProvider implements StatsProvider {
     if (seasons.length === 0) throw new Error("BALLDONTLIE returned no career season averages for this player.");
 
     let lastTenGames: PlayerGameLog[] = [];
-    try {
-      const params = new URLSearchParams({ per_page: "100", season_type: "regular" });
-      params.append("player_ids[]", String(providerPlayer.id));
-      params.append("seasons[]", String(season));
-      const payload = await this.request<BdlStatsResponse>(`/stats?${params}`);
-      const teamId = providerPlayer.team?.id ?? providerPlayer.team_id;
-      lastTenGames = (payload.data ?? []).filter((stat) => stat.game).sort((left, right) => (right.game?.date ?? "").localeCompare(left.game?.date ?? "")).slice(0, 10).map((stat) => {
-        const game = stat.game!;
-        const isHome = teamId === game.home_team_id;
-        const opponent = isHome ? game.visitor_team : game.home_team;
-        const teamScore = isHome ? game.home_team_score ?? 0 : game.visitor_team_score ?? 0;
-        const opponentScore = isHome ? game.visitor_team_score ?? 0 : game.home_team_score ?? 0;
-        return {
-          id: `bdl-stat-${stat.id}`,
-          gameId: `bdl-${game.id}`,
-          date: game.date?.slice(0, 10) ?? "",
-          opponentName: opponent?.full_name ?? "Opponent",
-          opponentShort: opponent?.abbreviation ?? "OPP",
-          homeAway: isHome ? "home" : "away",
-          result: teamScore >= opponentScore ? "W" : "L",
-          score: `${teamScore}-${opponentScore}`,
-          minutes: stat.min ?? "—",
-          points: stat.pts ?? 0,
-          rebounds: stat.reb ?? 0,
-          assists: stat.ast ?? 0,
-          steals: stat.stl ?? 0,
-          blocks: stat.blk ?? 0,
-          turnovers: stat.turnover ?? 0,
-          fieldGoals: `${stat.fgm ?? 0}-${stat.fga ?? 0}`,
-          threePointers: `${stat.fg3m ?? 0}-${stat.fg3a ?? 0}`,
-          plusMinus: stat.plus_minus ?? 0,
-        };
-      });
-    } catch { /* A lower provider tier can still return bio and season averages. */ }
+    try { lastTenGames = await this.getLastTenGames(providerPlayer, season); } catch { /* ALL-STAR+ game stats are optional. */ }
 
     return {
       player: { ...player, position: providerPlayer.position || player.position, teamName: providerPlayer.team?.full_name ?? player.teamName },
@@ -296,4 +425,8 @@ export const mockStatsProvider: StatsProvider = {
   name: "mock-repository",
   async getSeasonStats() { return { players: mockPlayerStats, teams: mockTeamStats }; },
   async getPlayerProfile(player, season) { return mockPlayerProfile(player, season); },
+  async getTeamStats(team, season) {
+    const stat = mockTeamStats.find((item) => item.teamId === team.id);
+    return stat ? { ...stat, season } : null;
+  },
 };

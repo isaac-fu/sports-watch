@@ -1,31 +1,31 @@
 import type { Game, GameEvent, NewsArticle, Player, PlayerStat, Team, TeamStat } from "./models";
 
 export const mockTeams: Team[] = [
-  { id: "gsw", name: "Golden State Warriors", short: "GSW", color: "#f3b942", record: "31–27" },
-  { id: "nyk", name: "New York Knicks", short: "NYK", color: "#3e7bd6", record: "38–21" },
-  { id: "okc", name: "Oklahoma City Thunder", short: "OKC", color: "#ee7654", record: "43–16" },
-  { id: "lal", name: "Los Angeles Lakers", short: "LAL", color: "#8f71c4", record: "35–24" },
-  { id: "bos", name: "Boston Celtics", short: "BOS", color: "#73b879", record: "45–14" },
-  { id: "phx", name: "Phoenix Suns", short: "PHX", color: "#e87554", record: "32–27" },
-  { id: "den", name: "Denver Nuggets", short: "DEN", color: "#4c79c7", record: "39–20" },
-  { id: "dal", name: "Dallas Mavericks", short: "DAL", color: "#6a9bc8", record: "34–25" },
-  { id: "mia", name: "Miami Heat", short: "MIA", color: "#ed8068", record: "30–29" },
-  { id: "sac", name: "Sacramento Kings", short: "SAC", color: "#7654a8", record: "29–30" },
+  { id: "gsw", name: "Golden State Warriors", short: "GSW", color: "#f3b942", record: "31–27", imageUrl: "https://a.espncdn.com/i/teamlogos/nba/500/gs.png", providerIds: { espn: "9" } },
+  { id: "nyk", name: "New York Knicks", short: "NYK", color: "#3e7bd6", record: "38–21", imageUrl: "https://a.espncdn.com/i/teamlogos/nba/500/ny.png", providerIds: { espn: "20" } },
+  { id: "okc", name: "Oklahoma City Thunder", short: "OKC", color: "#ee7654", record: "43–16", imageUrl: "https://a.espncdn.com/i/teamlogos/nba/500/okc.png", providerIds: { espn: "25" } },
+  { id: "lal", name: "Los Angeles Lakers", short: "LAL", color: "#8f71c4", record: "35–24", imageUrl: "https://a.espncdn.com/i/teamlogos/nba/500/lal.png", providerIds: { espn: "13" } },
+  { id: "bos", name: "Boston Celtics", short: "BOS", color: "#73b879", record: "45–14", imageUrl: "https://a.espncdn.com/i/teamlogos/nba/500/bos.png", providerIds: { espn: "2" } },
+  { id: "phx", name: "Phoenix Suns", short: "PHX", color: "#e87554", record: "32–27", imageUrl: "https://a.espncdn.com/i/teamlogos/nba/500/phx.png", providerIds: { espn: "21" } },
+  { id: "den", name: "Denver Nuggets", short: "DEN", color: "#4c79c7", record: "39–20", imageUrl: "https://a.espncdn.com/i/teamlogos/nba/500/den.png", providerIds: { espn: "7" } },
+  { id: "dal", name: "Dallas Mavericks", short: "DAL", color: "#6a9bc8", record: "34–25", imageUrl: "https://a.espncdn.com/i/teamlogos/nba/500/dal.png", providerIds: { espn: "6" } },
+  { id: "mia", name: "Miami Heat", short: "MIA", color: "#ed8068", record: "30–29", imageUrl: "https://a.espncdn.com/i/teamlogos/nba/500/mia.png", providerIds: { espn: "14" } },
+  { id: "sac", name: "Sacramento Kings", short: "SAC", color: "#7654a8", record: "29–30", imageUrl: "https://a.espncdn.com/i/teamlogos/nba/500/sac.png", providerIds: { espn: "23" } },
 ];
 
 export const mockPlayers: Player[] = [
-  { id: "stephen-curry", name: "Stephen Curry", teamId: "gsw", teamName: "Golden State Warriors", position: "Guard", initials: "SC", color: "#d99831" },
-  { id: "jonathan-kuminga", name: "Jonathan Kuminga", teamId: "gsw", teamName: "Golden State Warriors", position: "Forward", initials: "JK", color: "#c98c32" },
-  { id: "draymond-green", name: "Draymond Green", teamId: "gsw", teamName: "Golden State Warriors", position: "Forward", initials: "DG", color: "#b88a38" },
-  { id: "jalen-brunson", name: "Jalen Brunson", teamId: "nyk", teamName: "New York Knicks", position: "Guard", initials: "JB", color: "#4a82d6" },
-  { id: "shai-gilgeous-alexander", name: "Shai Gilgeous-Alexander", teamId: "okc", teamName: "Oklahoma City Thunder", position: "Guard", initials: "SG", color: "#e87554" },
-  { id: "lebron-james", name: "LeBron James", teamId: "lal", teamName: "Los Angeles Lakers", position: "Forward", initials: "LJ", color: "#8f71c4" },
-  { id: "jayson-tatum", name: "Jayson Tatum", teamId: "bos", teamName: "Boston Celtics", position: "Forward", initials: "JT", color: "#73b879" },
-  { id: "kevin-durant", name: "Kevin Durant", teamId: "phx", teamName: "Phoenix Suns", position: "Forward", initials: "KD", color: "#e87554" },
-  { id: "nikola-jokic", name: "Nikola Jokić", teamId: "den", teamName: "Denver Nuggets", position: "Center", initials: "NJ", color: "#4c79c7" },
-  { id: "luka-doncic", name: "Luka Dončić", teamId: "dal", teamName: "Dallas Mavericks", position: "Guard", initials: "LD", color: "#6a9bc8" },
-  { id: "bam-adebayo", name: "Bam Adebayo", teamId: "mia", teamName: "Miami Heat", position: "Center", initials: "BA", color: "#ed8068" },
-  { id: "domantas-sabonis", name: "Domantas Sabonis", teamId: "sac", teamName: "Sacramento Kings", position: "Center", initials: "DS", color: "#7654a8" },
+  { id: "stephen-curry", name: "Stephen Curry", teamId: "gsw", teamName: "Golden State Warriors", position: "Guard", initials: "SC", color: "#d99831", imageUrl: "https://a.espncdn.com/i/headshots/nba/players/full/3975.png", providerIds: { espn: "3975" } },
+  { id: "jonathan-kuminga", name: "Jonathan Kuminga", teamId: "gsw", teamName: "Golden State Warriors", position: "Forward", initials: "JK", color: "#c98c32", imageUrl: "https://a.espncdn.com/i/headshots/nba/players/full/4433247.png", providerIds: { espn: "4433247" } },
+  { id: "draymond-green", name: "Draymond Green", teamId: "gsw", teamName: "Golden State Warriors", position: "Forward", initials: "DG", color: "#b88a38", imageUrl: "https://a.espncdn.com/i/headshots/nba/players/full/6589.png", providerIds: { espn: "6589" } },
+  { id: "jalen-brunson", name: "Jalen Brunson", teamId: "nyk", teamName: "New York Knicks", position: "Guard", initials: "JB", color: "#4a82d6", imageUrl: "https://a.espncdn.com/i/headshots/nba/players/full/3934672.png", providerIds: { espn: "3934672" } },
+  { id: "shai-gilgeous-alexander", name: "Shai Gilgeous-Alexander", teamId: "okc", teamName: "Oklahoma City Thunder", position: "Guard", initials: "SG", color: "#e87554", imageUrl: "https://a.espncdn.com/i/headshots/nba/players/full/4278073.png", providerIds: { espn: "4278073" } },
+  { id: "lebron-james", name: "LeBron James", teamId: "lal", teamName: "Los Angeles Lakers", position: "Forward", initials: "LJ", color: "#8f71c4", imageUrl: "https://a.espncdn.com/i/headshots/nba/players/full/1966.png", providerIds: { espn: "1966" } },
+  { id: "jayson-tatum", name: "Jayson Tatum", teamId: "bos", teamName: "Boston Celtics", position: "Forward", initials: "JT", color: "#73b879", imageUrl: "https://a.espncdn.com/i/headshots/nba/players/full/4065648.png", providerIds: { espn: "4065648" } },
+  { id: "kevin-durant", name: "Kevin Durant", teamId: "phx", teamName: "Phoenix Suns", position: "Forward", initials: "KD", color: "#e87554", imageUrl: "https://a.espncdn.com/i/headshots/nba/players/full/3202.png", providerIds: { espn: "3202" } },
+  { id: "nikola-jokic", name: "Nikola Jokić", teamId: "den", teamName: "Denver Nuggets", position: "Center", initials: "NJ", color: "#4c79c7", imageUrl: "https://a.espncdn.com/i/headshots/nba/players/full/3112335.png", providerIds: { espn: "3112335" } },
+  { id: "luka-doncic", name: "Luka Dončić", teamId: "dal", teamName: "Dallas Mavericks", position: "Guard", initials: "LD", color: "#6a9bc8", imageUrl: "https://a.espncdn.com/i/headshots/nba/players/full/3945274.png", providerIds: { espn: "3945274" } },
+  { id: "bam-adebayo", name: "Bam Adebayo", teamId: "mia", teamName: "Miami Heat", position: "Center", initials: "BA", color: "#ed8068", imageUrl: "https://a.espncdn.com/i/headshots/nba/players/full/4066261.png", providerIds: { espn: "4066261" } },
+  { id: "domantas-sabonis", name: "Domantas Sabonis", teamId: "sac", teamName: "Sacramento Kings", position: "Center", initials: "DS", color: "#7654a8", imageUrl: "https://a.espncdn.com/i/headshots/nba/players/full/3153174.png", providerIds: { espn: "3153174" } },
 ];
 
 const teamById = new Map(mockTeams.map((team) => [team.id, team]));

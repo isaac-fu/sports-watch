@@ -5,12 +5,13 @@ import { getDiscoveryRecommendations } from "@/lib/recommendations/service";
 import type { Game } from "@/lib/models";
 import { loadNewsArticles } from "@/lib/content-repository";
 import { getAccountContext } from "@/lib/auth-session";
+import { loadCatalog } from "@/lib/catalog-repository";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
   const context = await getAccountContext(request);
-  const [preferences, news] = await Promise.all([getCurrentPreferences(context.accountId), loadNewsArticles()]);
+  const [preferences, news] = await Promise.all([getCurrentPreferences(context.accountId), loadNewsArticles(), loadCatalog()]);
   let games: Game[];
   try {
     games = await getNbaProvider().getGames();

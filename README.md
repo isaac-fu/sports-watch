@@ -11,6 +11,14 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000).
 
+Run the production checks locally with:
+
+```bash
+npm test
+npm run lint
+npm run build
+```
+
 ## Run with Docker
 
 ```bash
@@ -33,15 +41,43 @@ The web app will be available at [http://localhost:3000](http://localhost:3000).
 - Separate My teams and My players screens, each with ranked discovery suggestions and recommendation reasons.
 - Clickable team profiles with current record and efficiency metrics, roster links, relevant news, and recent/upcoming games that open in the game center.
 - Clickable player profiles with team and bio information, current-season averages, weighted regular-season career averages, season history, and last-10 box scores.
+- BALLDONTLIE player profiles that paginate game logs across the current and prior regular seasons, plus provider-backed team records, conference rank, scoring, and opponent scoring.
 - Clickable feed and team-news stories with related team/player context, safe publisher links, and account-specific save/unsave controls.
 - Saved-story library backed by PostgreSQL with an in-memory local fallback, plus compact mobile navigation for every main section.
 - High-value alert candidate generation for game starts, close games, final scores, and standout performances.
 - Ranked, deduplicated alert delivery with PostgreSQL persistence, an in-memory fallback, an in-app inbox, and a Docker polling worker.
-- Provider-backed news and season-stat synchronization with PostgreSQL caching and automatic mock fallback.
+- Provider-backed canonical teams/players, news, and season-stat synchronization with PostgreSQL caching and automatic static/mock fallback.
 - Email/password accounts with scrypt password hashing, revocable database sessions, HTTP-only cookies, and isolated preferences and alerts.
 - Persistent, skippable new-account onboarding for initial teams, players, and alert choices; skipped accounts retain the popular cold-start experience.
 
 Mock data remains the default so the full app runs without paid API credentials. Account preferences and synchronized content are persisted to PostgreSQL when the database is available, with in-memory fallbacks for local development.
+
+## NBA.com stats through `nba_api`
+
+Player and team statistics can be loaded without a BALLDONTLIE stats subscription by running the bundled Python `nba_api` service. The service resolves NBA.com IDs, rate-limits upstream requests, caches responses for 15 minutes by default, and exposes only normalized data to the Next.js app. Scheduled synchronization then stores the current season snapshot in PostgreSQL.
+
+For Docker Compose, set these values in `.env` and start the stack:
+
+```dotenv
+CATALOG_DATA_PROVIDER=nba_api
+STATS_DATA_PROVIDER=nba_api
+```
+
+```bash
+docker compose up -d --build
+```
+
+Compose makes the service available to the web container at `http://nba-api:8000` and to the host at `http://localhost:8001`. Its health endpoint is `GET /health`. No NBA API key is required.
+
+For `npm run dev` outside Docker, start the Python service separately and keep `NBA_API_SERVICE_URL=http://localhost:8001`:
+
+```powershell
+py -m venv .venv
+.\.venv\Scripts\python -m pip install -r .\nba-api-service\requirements.txt
+.\.venv\Scripts\python -m uvicorn app:app --app-dir .\nba-api-service --host 127.0.0.1 --port 8001
+```
+
+The catalog sync stores NBA identifiers under `providerIds.nba_api`. Player profiles use `PlayerCareerStats` and `CommonPlayerInfo`; their last-ten list merges `PlayerGameLog` data from the requested and previous seasons, then sorts by date. Team profiles use league standings and automatically fall back to the previous completed season when the requested season has no completed games yet. If the Python service or NBA.com fails, the existing application-level mock fallback remains active; BALLDONTLIE can be restored at any time with `STATS_DATA_PROVIDER=balldontlie`.
 
 ## MVP API surface
 
@@ -75,10 +111,10 @@ The backend seam is implemented as Next.js route handlers. Preferences use Postg
 | `DELETE /api/saved/articles?articleId=:id` | Remove a story from the current account's library. |
 | `GET /api/feed` | Ranked personalized feed with relevance scores and recommendation reasons; supports `limit`. |
 | `GET /api/recommendations/discovery` | Ranked team and player suggestions based on favorites, upcoming opponents, and current stories. |
-| `GET /api/ingestion/sync` | Latest news/stats synchronization results. |
-| `POST /api/ingestion/sync` | Synchronize configured providers into the content cache. |
+| `GET /api/ingestion/sync` | Latest catalog/news/stats synchronization results. |
+| `POST /api/ingestion/sync` | Synchronize configured providers into the content cache; requires the data-sync worker token. |
 
-The schedule screen reads from `GET /api/games`. The `alert-worker` polls the protected all-account alert processor every 30 seconds, while `data-sync-worker` refreshes news and stats every 15 minutes by default. Push-notification channels are still future work.
+The schedule screen reads from `GET /api/games`. The `alert-worker` polls the protected all-account alert processor every 30 seconds, while `data-sync-worker` refreshes the catalog, news, and stats every 15 minutes by default. Push-notification channels are still future work.
 
 ## Accounts and sessions
 
@@ -105,8 +141,12 @@ The data-sync worker can populate the same APIs and recommendation pipeline with
 ```dotenv
 NEWS_DATA_PROVIDER=newsapi
 NEWS_API_KEY=your-newsapi-key
-STATS_DATA_PROVIDER=balldontlie
+STATS_DATA_PROVIDER=nba_api
+CATALOG_DATA_PROVIDER=nba_api
 BALLDONTLIE_API_KEY=your-balldontlie-key
+DATA_SYNC_WORKER_TOKEN=replace-with-a-long-random-secret
 ```
 
-NewsAPI articles are tagged to known teams and players before they are cached. BALLDONTLIE season averages are mapped to the app's player model; team aggregates remain the local MVP dataset for now. If either provider fails or returns no usable data, that domain falls back to mock data and records the fallback in `GET /api/ingestion/sync`.
+The catalog sync imports provider teams and active players, reconciles them to stable app IDs, and stores provider IDs in PostgreSQL. Existing curated team logos and player headshots are retained when identities match; newly discovered entities use the initials/color fallback until artwork is curated. NewsAPI articles are tagged only after the catalog is current. `nba_api` is the recommended stats/catalog option for local and beta use; BALLDONTLIE remains supported for games, catalog, and stats when the account tier exposes the necessary endpoints. Both stats adapters combine current and prior-season game logs to produce a true latest-10 list before a new season has enough games. If a provider fails or returns no usable data, that domain falls back to the static/mock dataset and records the fallback in `GET /api/ingestion/sync`.
+
+`POST /api/ingestion/sync` accepts the `x-worker-token` header. Docker Compose supplies `DATA_SYNC_WORKER_TOKEN` to both the web service and the sync worker; production deployments should replace the local default with a long random secret.

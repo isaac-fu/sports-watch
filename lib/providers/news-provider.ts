@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { NewsArticle } from "@/lib/models";
-import { mockNews, mockPlayers, mockTeams } from "@/lib/mock-repository";
+import { canonicalPlayers, canonicalTeams } from "@/lib/catalog";
+import { mockNews } from "@/lib/mock-repository";
 
 export interface NewsProvider {
   readonly name: string;
@@ -23,11 +24,11 @@ const normalized = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g,
 
 function classifyArticle(article: NewsApiArticle) {
   const text = normalized(`${article.title ?? ""} ${article.description ?? ""} ${article.content ?? ""}`);
-  const teamIds = mockTeams.filter((team) => {
+  const teamIds = canonicalTeams.filter((team) => {
     const names = [team.name, team.short, team.name.split(" ").at(-1) ?? ""];
     return names.some((name) => name.length > 2 && text.includes(normalized(name)));
   }).map((team) => team.id);
-  const playerIds = mockPlayers.filter((player) => text.includes(normalized(player.name))).map((player) => player.id);
+  const playerIds = canonicalPlayers.filter((player) => text.includes(normalized(player.name))).map((player) => player.id);
   const tags = ["nba"];
   if (/\b(injur|sprain|strain|out for|questionable|doubtful)\w*\b/.test(text)) tags.push("injury");
   if (/\b(trade|sign|waive|contract|roster)\w*\b/.test(text)) tags.push("roster");
