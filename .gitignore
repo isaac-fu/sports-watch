@@ -38,6 +38,9 @@ go.work.sum
 .env*
 !.env.example
 
+# text file next steps to be implemented
+instructions.txt
+
 # Editor/IDE
 # .idea/
 # .vscode/
