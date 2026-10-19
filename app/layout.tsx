@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Courtside — Your NBA, in focus",
+  title: "Sports Watch — Your NBA, in focus",
   description: "A personalized NBA companion for the teams and players you follow.",
 };
 

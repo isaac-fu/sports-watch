@@ -1,11 +1,12 @@
 import type { SyncResult } from "./models";
 import { getCatalog, reconcileProviderCatalog } from "./catalog";
 import { loadCatalog, saveCatalog } from "./catalog-repository";
-import { saveNewsArticles, saveSeasonStats, recordSyncResult } from "./content-repository";
+import { loadNewsArticles, saveNewsArticles, saveSeasonStats, recordSyncResult } from "./content-repository";
 import { getCatalogProvider, getNewsProvider, getStatsProvider } from "./providers";
 import { mockNewsProvider } from "./providers/news-provider";
 import { mockStatsProvider } from "./providers/stats-provider";
 import { currentNbaSeasonStart } from "./season";
+import { mergeNewsArticles } from "./news-cache";
 
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : "Unknown provider error";
 
@@ -28,15 +29,21 @@ async function syncCatalog(): Promise<SyncResult> {
   }
 }
 
-async function syncNews(): Promise<SyncResult> {
+export async function syncNews(): Promise<SyncResult> {
   const selected = getNewsProvider();
   const syncedAt = new Date().toISOString();
+  const existing = await loadNewsArticles();
   try {
-    const articles = await selected.getLatestArticles();
-    if (articles.length === 0) throw new Error(`${selected.name} returned no NBA articles.`);
+    const freshArticles = await selected.getLatestArticles();
+    if (freshArticles.length === 0) throw new Error(`${selected.name} returned no NBA articles.`);
+    const cachedArticles = existing.source === selected.name ? existing.articles : [];
+    const articles = mergeNewsArticles(freshArticles, cachedArticles);
     await saveNewsArticles(articles, selected.name);
     return { domain: "news", provider: selected.name, status: "success", itemCount: articles.length, syncedAt };
   } catch (error) {
+    if (existing.articles.length > 0) {
+      return { domain: "news", provider: existing.source, status: "fallback", itemCount: existing.articles.length, syncedAt, error: errorMessage(error) };
+    }
     const articles = await mockNewsProvider.getLatestArticles();
     await saveNewsArticles(articles, mockNewsProvider.name);
     return { domain: "news", provider: mockNewsProvider.name, status: "fallback", itemCount: articles.length, syncedAt, error: errorMessage(error) };

@@ -4,14 +4,16 @@ import type { Player, Team } from "./models";
 
 export type CatalogSnapshot = Catalog & { source: string; syncedAt: string | null };
 
-type CatalogCache = { source: string; syncedAt: string | null };
+type CatalogCache = { source: string; syncedAt: string | null; loadedAt: number };
 
 declare global {
   var __courtsideCatalogCache: CatalogCache | undefined;
   var __courtsideCatalogTables: Promise<void> | undefined;
 }
 
-const cache = globalThis.__courtsideCatalogCache ?? (globalThis.__courtsideCatalogCache = { source: "static-catalog", syncedAt: null });
+const cache = globalThis.__courtsideCatalogCache ?? (globalThis.__courtsideCatalogCache = { source: "static-catalog", syncedAt: null, loadedAt: 0 });
+cache.loadedAt ??= 0;
+const catalogReadCacheMs = 5 * 60 * 1000;
 
 async function ensureCatalogTables() {
   const pool = getDbPool();
@@ -67,6 +69,7 @@ const playerFromRow = (row: Record<string, unknown>): Player => ({
 export async function loadCatalog(): Promise<CatalogSnapshot> {
   const pool = getDbPool();
   if (pool) {
+    if (cache.loadedAt > 0 && Date.now() - cache.loadedAt < catalogReadCacheMs) return { ...getCatalog(), source: cache.source, syncedAt: cache.syncedAt };
     try {
       await ensureCatalogTables();
       const [teamRows, playerRows] = await Promise.all([
@@ -79,6 +82,7 @@ export async function loadCatalog(): Promise<CatalogSnapshot> {
         replaceCanonicalCatalog(catalog);
         cache.source = String(first.provider);
         cache.syncedAt = new Date(first.synced_at).toISOString();
+        cache.loadedAt = Date.now();
       }
     } catch { /* retain the in-process fallback */ }
   }
@@ -90,6 +94,7 @@ export async function saveCatalog(catalog: Catalog, provider: string) {
   replaceCanonicalCatalog(catalog);
   cache.source = provider;
   cache.syncedAt = syncedAt;
+  cache.loadedAt = Date.now();
   const pool = getDbPool();
   if (!pool) return;
   await ensureCatalogTables();

@@ -44,4 +44,13 @@ describe("canonical catalog", () => {
     expect(luka).toMatchObject({ teamId: "lal", teamName: "Los Angeles Lakers", position: "Guard / Forward" });
     expect(catalog.teams.find((team) => team.id === "gsw")?.providerIds?.balldontlie).toBe("10");
   });
+
+  it("adds NBA CDN images for newly discovered nba_api entities", () => {
+    const catalog = reconcileProviderCatalog("nba_api", {
+      teams: [{ providerId: "1610612737", name: "Atlanta Hawks", short: "ATL" }],
+      players: [{ providerId: "203991", name: "Clint Capela", position: "C", teamProviderId: "1610612737" }],
+    }, { teams: [], players: [] });
+    expect(catalog.teams[0].imageUrl).toContain("1610612737");
+    expect(catalog.players[0].imageUrl).toContain("203991.png");
+  });
 });

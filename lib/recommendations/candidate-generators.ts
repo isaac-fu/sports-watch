@@ -1,6 +1,7 @@
 import type { AlertCandidate, Game, GameCenter, NewsArticle, Player, Preferences, Team } from "@/lib/models";
 import { canonicalPlayers } from "@/lib/catalog";
 import { formatPacificTipTime, scheduledGameTimestamp } from "@/lib/game-time";
+import { classifyNewsText } from "@/lib/news-classifier";
 import type { GameCandidate, GameEventCandidate, NewsCandidate, PlayerCandidate, RecommendationInputs, TeamCandidate } from "./types";
 
 const nationallyVisible = (game: Game) => ["ABC", "ESPN", "TNT", "NBA TV"].includes(game.network.toUpperCase());
@@ -16,8 +17,12 @@ function importanceFor(article: NewsArticle) {
 export function generateNewsCandidates(articles: NewsArticle[], teams: Team[], players: Player[], preferences: Preferences): NewsCandidate[] {
   const coldStart = preferences.followedTeamIds.length === 0 && preferences.followedPlayerIds.length === 0;
   return articles.flatMap((article) => {
-    const matchedTeams = teams.filter((team) => preferences.followedTeamIds.includes(team.id) && article.teamIds.includes(team.id));
-    const matchedPlayers = players.filter((player) => preferences.followedPlayerIds.includes(player.id) && article.playerIds.includes(player.id));
+    const inferred = classifyNewsText([article.title, article.summary, article.source, article.url], teams, players);
+    const articleTeamIds = new Set([...article.teamIds, ...inferred.teamIds]);
+    const articlePlayerIds = new Set([...article.playerIds, ...inferred.playerIds]);
+    if (articleTeamIds.size === 0 && articlePlayerIds.size === 0 && !inferred.nbaRelated) return [];
+    const matchedTeams = teams.filter((team) => preferences.followedTeamIds.includes(team.id) && articleTeamIds.has(team.id));
+    const matchedPlayers = players.filter((player) => preferences.followedPlayerIds.includes(player.id) && articlePlayerIds.has(player.id));
     const importanceScore = importanceFor(article);
     const sources: NewsCandidate["sources"] = [];
     if (matchedTeams.length) sources.push("followed-team");
@@ -27,12 +32,12 @@ export function generateNewsCandidates(articles: NewsArticle[], teams: Team[], p
     if (sources.length === 0) return [];
 
     return [{
-      article,
+      article: { ...article, teamIds: Array.from(articleTeamIds), playerIds: Array.from(articlePlayerIds) },
       matchedTeams,
       matchedPlayers,
       freshnessHours: Math.max(0, (Date.now() - new Date(article.publishedAt).getTime()) / 3_600_000),
       importanceScore,
-      sourceQualityScore: article.source.startsWith("Courtside") ? 8 : 6,
+      sourceQualityScore: article.source.startsWith("Sports Watch") ? 8 : 6,
       sources,
     }];
   });

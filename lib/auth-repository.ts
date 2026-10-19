@@ -75,6 +75,7 @@ const accountFromRow = (row: Record<string, unknown>): Account => ({
 });
 
 export class DuplicateEmailError extends Error {}
+export class InvalidCurrentPasswordError extends Error {}
 
 export async function registerAccount(input: { displayName: string; email: string; password: string; timezone: string }) {
   const email = normalizeEmail(input.email);
@@ -124,6 +125,46 @@ export async function authenticateAccount(emailInput: string, password: string):
   }
   const credential = memory.credentials.get(email);
   return credential && await verifyPassword(password, credential.passwordHash) ? credential.account : null;
+}
+
+export async function updateAccountSettings(accountId: string, input: { displayName?: string; currentPassword?: string; newPassword?: string }) {
+  const displayName = input.displayName?.trim();
+  const passwordHash = input.newPassword ? await hashPassword(input.newPassword) : null;
+  const pool = getDbPool();
+  if (pool) {
+    await ensureAuthTables();
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const current = await client.query("SELECT id, display_name, email, timezone, created_at, password_hash FROM accounts WHERE id=$1 FOR UPDATE", [accountId]);
+      const row = current.rows[0];
+      if (!row) throw new Error("Account not found.");
+      if (input.newPassword && (!row.password_hash || !input.currentPassword || !(await verifyPassword(input.currentPassword, row.password_hash)))) {
+        throw new InvalidCurrentPasswordError("Current password is incorrect.");
+      }
+      const result = await client.query(`
+        UPDATE accounts
+        SET display_name=COALESCE($2, display_name), password_hash=COALESCE($3, password_hash)
+        WHERE id=$1
+        RETURNING id, display_name, email, timezone, created_at
+      `, [accountId, displayName || null, passwordHash]);
+      await client.query("COMMIT");
+      return accountFromRow(result.rows[0]);
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally { client.release(); }
+  }
+
+  const entry = Array.from(memory.credentials.entries()).find(([, credential]) => credential.account.id === accountId);
+  if (!entry) throw new Error("Account not found.");
+  const [email, credential] = entry;
+  if (input.newPassword && (!input.currentPassword || !(await verifyPassword(input.currentPassword, credential.passwordHash)))) {
+    throw new InvalidCurrentPasswordError("Current password is incorrect.");
+  }
+  const account = { ...credential.account, displayName: displayName || credential.account.displayName };
+  memory.credentials.set(email, { account, passwordHash: passwordHash ?? credential.passwordHash });
+  return account;
 }
 
 export async function createSession(accountId: string) {

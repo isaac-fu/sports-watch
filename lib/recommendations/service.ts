@@ -4,8 +4,33 @@ import { mockNews } from "@/lib/mock-repository";
 import { generateAlertCandidates, generateGameCandidates, generateGameEventCandidates, generateNewsCandidates, generatePlayerCandidates, generateTeamCandidates } from "./candidate-generators";
 import { rankAlertCandidates, rankCatchUpCandidates, rankGameCandidates, rankGameEventCandidates, rankNewsCandidates, rankPlayerCandidates, rankTeamCandidates } from "./rankers";
 
+const feedBackfillTarget = 8;
+const recentNewsWindowMs = 7 * 24 * 60 * 60 * 1000;
+
 export function getPersonalizedFeed(preferences: Preferences, articles: NewsArticle[] = mockNews) {
-  return rankNewsCandidates(generateNewsCandidates(articles, canonicalTeams, canonicalPlayers, preferences));
+  const personalized = rankNewsCandidates(generateNewsCandidates(articles, canonicalTeams, canonicalPlayers, preferences));
+  if (articles.length === 0) return personalized;
+  const popular = rankNewsCandidates(generateNewsCandidates(articles, canonicalTeams, canonicalPlayers, {
+    ...preferences,
+    followedTeamIds: [],
+    followedPlayerIds: [],
+  }));
+  const coldStart = preferences.followedTeamIds.length === 0 && preferences.followedPlayerIds.length === 0;
+  if (coldStart || personalized.length >= feedBackfillTarget) return coldStart ? popular : personalized;
+
+  const recentCutoff = Date.now() - recentNewsWindowMs;
+  const combined = [...personalized];
+  const seenIds = new Set(combined.map((item) => item.id));
+  const seenTitles = new Set(combined.map((item) => item.title.toLowerCase().replace(/[^a-z0-9]/g, "")));
+  for (const item of popular) {
+    const titleKey = item.title.toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (combined.length >= feedBackfillTarget) break;
+    if (new Date(item.publishedAt).getTime() < recentCutoff || seenIds.has(item.id) || seenTitles.has(titleKey)) continue;
+    combined.push(item);
+    seenIds.add(item.id);
+    seenTitles.add(titleKey);
+  }
+  return combined.sort((left, right) => new Date(right.publishedAt).getTime() - new Date(left.publishedAt).getTime() || right.relevanceScore - left.relevanceScore);
 }
 
 export function getDiscoveryRecommendations(preferences: Preferences, games: Game[], articles: NewsArticle[] = mockNews) {

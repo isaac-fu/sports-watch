@@ -22,7 +22,7 @@ from nba_api.stats.endpoints import (
 from nba_api.stats.static import teams as static_teams
 
 
-app = FastAPI(title="Courtside nba_api provider", version="1.0.0")
+app = FastAPI(title="Sports Watch nba_api provider", version="1.0.0")
 
 
 def _positive_float(name: str, fallback: float) -> float:

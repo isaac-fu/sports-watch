@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { formatPacificTipTime } from "@/lib/game-time";
 import { searchPlayers, searchTeams } from "@/lib/entity-search";
+import { feedFreshnessLabel, feedFreshnessThresholdsMs } from "@/lib/feed-freshness";
 
 type FeedItem = {
   id: string;
@@ -179,6 +180,8 @@ type TeamProfileData = {
 };
 
 type ScheduleView = "day" | "week" | "month";
+type ThemeMode = "dark" | "light";
+type SettingsSection = "account" | "preferences" | "appearance";
 
 const defaultTeams: Team[] = [
   { id: "gsw", name: "Golden State Warriors", short: "GSW", color: "#f3b942", record: "31–27", imageUrl: "https://a.espncdn.com/i/teamlogos/nba/500/gs.png" },
@@ -208,6 +211,7 @@ const formatRelativeTime = (value: string) => {
   const hours = Math.floor(minutes / 60);
   return hours < 24 ? `${hours} hr${hours === 1 ? "" : "s"} ago` : new Date(value).toLocaleDateString("en-US", { month: "short", day: "numeric" });
 };
+const newestFeedFirst = (items: FeedItem[]) => [...items].sort((left, right) => new Date(right.publishedAt).getTime() - new Date(left.publishedAt).getTime() || right.relevanceScore - left.relevanceScore);
 const initialsFor = (name: string) => name.split(" ").map((part) => part[0]).join("").slice(0, 2).toUpperCase();
 const safeExternalUrl = (value: string) => {
   try {
@@ -304,7 +308,7 @@ function ArticleDetailView({ article, loading, error, saved, saving, backLabel, 
     <h1>{article.title}</h1>
     <div className="article-tags">{article.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>
     <p className="article-summary">{article.summary}</p>
-    <p className="article-context">Courtside keeps the publisher&apos;s concise summary here so you can understand why the story matters before deciding whether to open the original coverage.</p>
+    <p className="article-context">Sports Watch keeps the publisher&apos;s concise summary here so you can understand why the story matters before deciding whether to open the original coverage.</p>
     <div className="article-actions"><button className={saved ? "article-save saved" : "article-save"} disabled={saving} onClick={onToggleSave}>{saving ? "Saving…" : saved ? "✓ Saved" : "＋ Save story"}</button>{externalUrl ? <a href={externalUrl} target="_blank" rel="noreferrer">Read at {article.source} <span>↗</span></a> : <span className="article-demo-note">Full article link unavailable in demo data</span>}</div>{error && <p className="preference-status error">{error}</p>}
   </article>
     {(relatedTeams.length > 0 || relatedPlayers.length > 0) && <section className="article-related"><div className="section-heading"><div><p className="overline">PERSONALIZED CONTEXT</p><h2>People and teams in this story</h2></div></div><div className="article-related-list">{relatedTeams.map((team) => <button key={team.id} onClick={() => onOpenTeam(team.id)}><TeamMark short={team.short} color={team.color} imageUrl={team.imageUrl} /><span><strong>{team.name}</strong><small>{team.record} record</small></span><b>Team profile →</b></button>)}{relatedPlayers.map((player) => <button key={player.id} onClick={() => onOpenPlayer(player.id)}><PlayerAvatar player={player} className="preference-avatar" /><span><strong>{player.name}</strong><small>{player.teamName} · {player.position}</small></span><b>Player profile →</b></button>)}</div></section>}
@@ -350,7 +354,7 @@ function PlayerProfileView({ profile, loading, error, isFollowed, onBack, onRetr
   const seasonMetrics = season ? [["PPG", season.pointsPerGame], ["RPG", season.reboundsPerGame], ["APG", season.assistsPerGame], ["SPG", season.stealsPerGame], ["FG%", `${season.fieldGoalPercentage}%`], ["3P%", `${season.threePointPercentage}%`]] : [];
   const careerMetrics = career ? [["PPG", career.pointsPerGame], ["RPG", career.reboundsPerGame], ["APG", career.assistsPerGame], ["Games", career.gamesPlayed], ["FG%", `${career.fieldGoalPercentage}%`], ["3P%", `${career.threePointPercentage}%`]] : [];
   const draft = profile.bio.draftYear ? `${profile.bio.draftYear}${profile.bio.draftRound ? ` · Round ${profile.bio.draftRound}` : ""}${profile.bio.draftNumber ? ` · Pick ${profile.bio.draftNumber}` : ""}` : "—";
-  const sourceLabel = profile.source === "mock-repository" ? "Demo profile data" : "BALLDONTLIE player data";
+  const sourceLabel = profile.source === "mock-repository" ? "Demo profile data" : `${profile.source} player data`;
 
   return <div className="player-profile-page">
     <div className="player-profile-heading"><button className="profile-back" onClick={onBack}>← My players</button></div>
@@ -364,6 +368,48 @@ function PlayerProfileView({ profile, loading, error, isFollowed, onBack, onRetr
 
     <section className="player-data-panel"><div className="section-heading"><div><p className="overline">CAREER</p><h2>Season by season</h2><p className="panel-copy">Regular-season averages, weighted by games played in the career summary above.</p></div><span className="count-badge">{profile.seasons.length} seasons</span></div>{profile.seasons.length > 0 ? <div className="player-table-wrap"><table className="player-stats-table season-history"><thead><tr><th>Season</th><th>Team</th><th>GP</th><th>PTS</th><th>REB</th><th>AST</th><th>STL</th><th>BLK</th><th>TO</th><th>FG%</th><th>3P%</th></tr></thead><tbody>{profile.seasons.map((item) => <tr key={item.season}><td><strong>{item.seasonLabel}</strong></td><td>{item.teamName}</td><td>{item.gamesPlayed}</td><td>{item.pointsPerGame}</td><td>{item.reboundsPerGame}</td><td>{item.assistsPerGame}</td><td>{item.stealsPerGame}</td><td>{item.blocksPerGame}</td><td>{item.turnoversPerGame}</td><td>{item.fieldGoalPercentage}</td><td>{item.threePointPercentage}</td></tr>)}</tbody></table></div> : <div className="profile-empty table-empty">Season history is unavailable.</div>}<div className="provider-note"><span className="status-dot" />{sourceLabel} · Updated {formatRelativeTime(profile.updatedAt)}</div></section>
   </div>;
+}
+
+function SettingsView({ account, authenticated, teams, players, preferences, savingPreferences, theme, section, onSectionChange, onThemeChange, onAccountUpdated, onToggleTeam, onTogglePlayer, onSignIn }: { account: Account; authenticated: boolean; teams: Team[]; players: Player[]; preferences: Preferences; savingPreferences: boolean; theme: ThemeMode; section: SettingsSection; onSectionChange: (section: SettingsSection) => void; onThemeChange: (theme: ThemeMode) => void; onAccountUpdated: (account: Account) => void; onToggleTeam: (teamId: string) => void; onTogglePlayer: (playerId: string) => void; onSignIn: () => void }) {
+  const [teamQuery, setTeamQuery] = useState("");
+  const [playerQuery, setPlayerQuery] = useState("");
+  const [accountSaving, setAccountSaving] = useState(false);
+  const [accountStatus, setAccountStatus] = useState("");
+  const visibleTeams = searchTeams(teams, teamQuery).slice(0, teamQuery.trim() ? 30 : 18);
+  const followedPlayerSet = new Set(preferences.followedPlayerIds);
+  const visiblePlayers = playerQuery.trim()
+    ? searchPlayers(players, playerQuery).slice(0, 30)
+    : [...players.filter((player) => followedPlayerSet.has(player.id)), ...players.filter((player) => !followedPlayerSet.has(player.id)).slice(0, 18)];
+
+  const saveAccount = async (body: Record<string, string>, successMessage: string, form?: HTMLFormElement) => {
+    setAccountSaving(true);
+    setAccountStatus("");
+    try {
+      const payload = await fetchJson<{ data: Account }>("/api/account", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      onAccountUpdated(payload.data);
+      setAccountStatus(successMessage);
+      form?.reset();
+    } catch (saveError) {
+      setAccountStatus(saveError instanceof Error ? saveError.message : "Could not update your account.");
+    } finally { setAccountSaving(false); }
+  };
+
+  const submitProfile = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    void saveAccount({ displayName: String(data.get("displayName") ?? "") }, "Display name updated.");
+  };
+  const submitPassword = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    void saveAccount({ currentPassword: String(data.get("currentPassword") ?? ""), newPassword: String(data.get("newPassword") ?? "") }, "Password updated.", form);
+  };
+
+  return <div className="settings-page"><div className="page-heading"><p className="overline">PERSONALIZE SPORTS WATCH</p><h1>Settings</h1><p className="subhead">Manage your account, favorites, and display preferences in one place.</p></div><div className="settings-shell"><nav className="settings-menu" aria-label="Settings sections">{([['account', 'Account', 'Name, email, and password'], ['preferences', 'Preferences', 'Teams and players'], ['appearance', 'Appearance', 'Light and dark mode']] as const).map(([key, label, detail]) => <button className={section === key ? "active" : ""} key={key} onClick={() => { onSectionChange(key); setAccountStatus(""); }}><span><strong>{label}</strong><small>{detail}</small></span><b>›</b></button>)}</nav><section className="settings-content">
+    {section === "account" ? <><div className="settings-section-heading"><p className="overline">ACCOUNT SETTINGS</p><h2>Your account</h2><p>Update the details used across Sports Watch.</p></div>{authenticated ? <div className="account-settings-forms"><form className="settings-form" onSubmit={submitProfile}><h3>Account details</h3><label>Display name<input name="displayName" defaultValue={account.displayName} minLength={2} maxLength={50} required /></label><label>Email<input value={account.email} disabled /></label><button disabled={accountSaving}>Save profile</button></form><form className="settings-form password-form" onSubmit={submitPassword}><h3>Change password</h3><label>Current password<input name="currentPassword" type="password" autoComplete="current-password" required /></label><label>New password<input name="newPassword" type="password" autoComplete="new-password" minLength={8} maxLength={128} required /></label><button disabled={accountSaving}>Update password</button></form>{accountStatus && <p className="settings-status" role="status">{accountStatus}</p>}</div> : <div className="settings-signin"><strong>Sign in to edit account details</strong><p>Your preferences can still be explored in demo mode.</p><button onClick={onSignIn}>Sign in</button></div>}</> : section === "preferences" ? <><div className="settings-section-heading"><p className="overline">PREFERENCES</p><h2>Shape your feed</h2><p>Tap a compact bubble to follow or unfollow it. No profile images, just quick choices.</p></div><div className="compact-preference-section"><div className="compact-preference-title"><h3>Teams</h3><span>{preferences.followedTeamIds.length} followed</span></div><EntitySearch value={teamQuery} onChange={setTeamQuery} label="Search teams in settings" placeholder="Search teams" /><div className="preference-bubbles">{visibleTeams.map((team) => { const selected = preferences.followedTeamIds.includes(team.id); return <button className={selected ? "preference-bubble selected" : "preference-bubble"} key={team.id} disabled={savingPreferences} onClick={() => onToggleTeam(team.id)}><span>{team.name}</span><b>{selected ? "✓" : "+"}</b></button>; })}</div></div><div className="compact-preference-section"><div className="compact-preference-title"><h3>Players</h3><span>{preferences.followedPlayerIds.length} followed</span></div><EntitySearch value={playerQuery} onChange={setPlayerQuery} label="Search players in settings" placeholder="Search players" /><div className="preference-bubbles">{visiblePlayers.map((player) => { const selected = preferences.followedPlayerIds.includes(player.id); return <button className={selected ? "preference-bubble selected" : "preference-bubble"} key={player.id} disabled={savingPreferences} onClick={() => onTogglePlayer(player.id)}><span>{player.name}</span><b>{selected ? "✓" : "+"}</b></button>; })}</div></div></> : <><div className="settings-section-heading"><p className="overline">APPEARANCE</p><h2>Choose a theme</h2><p>Your selection is saved on this device.</p></div><div className="theme-options">{([['dark', 'Dark', 'Deep navy surfaces with bright blue accents'], ['light', 'Light', 'White surfaces with crisp blue accents']] as const).map(([mode, label, detail]) => <button className={theme === mode ? "theme-option selected" : "theme-option"} key={mode} onClick={() => onThemeChange(mode)}><span className={`theme-preview ${mode}`}><i /><i /><i /></span><span><strong>{label}</strong><small>{detail}</small></span><b>{theme === mode ? "✓" : ""}</b></button>)}</div></>}
+  </section></div></div>;
 }
 
 function AuthModal({ onClose }: { onClose: () => void }) {
@@ -392,7 +438,7 @@ function AuthModal({ onClose }: { onClose: () => void }) {
     }
   };
 
-  return <div className="modal-backdrop" onClick={onClose}><section className="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-title" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={onClose} aria-label="Close">×</button><div className="auth-brand"><span className="brand-dot" />courtside</div><p className="overline">YOUR NBA, SAVED</p><h2 id="auth-title">{mode === "login" ? "Welcome back" : "Create your account"}</h2><p className="auth-copy">{mode === "login" ? "Sign in to load your teams, players, alerts, and personal feed." : "Save your favorites and get a personal NBA feed on every visit."}</p><form className="auth-form" onSubmit={submit}>{mode === "register" && <label>Display name<input name="displayName" autoComplete="name" minLength={2} maxLength={50} required placeholder="Isaac" /></label>}<label>Email<input name="email" type="email" autoComplete="email" required placeholder="you@example.com" /></label><label>Password<input name="password" type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} minLength={8} maxLength={128} required placeholder="At least 8 characters" /></label>{error && <p className="auth-error" role="alert">{error}</p>}<button className="auth-submit" disabled={submitting}>{submitting ? "Please wait…" : mode === "login" ? "Sign in" : "Create account"}<span>→</span></button></form><button className="auth-switch" onClick={() => { setMode((current) => current === "login" ? "register" : "login"); setError(""); }}>{mode === "login" ? "New to Courtside? Create an account" : "Already have an account? Sign in"}</button><p className="auth-demo">You can close this window to keep exploring in shared demo mode.</p></section></div>;
+  return <div className="modal-backdrop" onClick={onClose}><section className="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-title" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={onClose} aria-label="Close">×</button><div className="auth-brand"><span className="brand-dot" />Sports Watch</div><p className="overline">YOUR NBA, SAVED</p><h2 id="auth-title">{mode === "login" ? "Welcome back" : "Create your account"}</h2><p className="auth-copy">{mode === "login" ? "Sign in to load your teams, players, alerts, and personal feed." : "Save your favorites and get a personal NBA feed on every visit."}</p><form className="auth-form" onSubmit={submit}>{mode === "register" && <label>Display name<input name="displayName" autoComplete="name" minLength={2} maxLength={50} required placeholder="Isaac" /></label>}<label>Email<input name="email" type="email" autoComplete="email" required placeholder="you@example.com" /></label><label>Password<input name="password" type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} minLength={8} maxLength={128} required placeholder="At least 8 characters" /></label>{error && <p className="auth-error" role="alert">{error}</p>}<button className="auth-submit" disabled={submitting}>{submitting ? "Please wait…" : mode === "login" ? "Sign in" : "Create account"}<span>→</span></button></form><button className="auth-switch" onClick={() => { setMode((current) => current === "login" ? "register" : "login"); setError(""); }}>{mode === "login" ? "New to Sports Watch? Create an account" : "Already have an account? Sign in"}</button><p className="auth-demo">You can close this window to keep exploring in shared demo mode.</p></section></div>;
 }
 
 function OnboardingModal({ teams, players, recommendedTeamIds, recommendedPlayerIds, initialPreferences }: { teams: Team[]; players: Player[]; recommendedTeamIds: string[]; recommendedPlayerIds: string[]; initialPreferences: Preferences }) {
@@ -428,23 +474,24 @@ function OnboardingModal({ teams, players, recommendedTeamIds, recommendedPlayer
   const toggleId = (id: string, current: string[], setCurrent: (ids: string[]) => void) => setCurrent(current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
   const stepNames = ["Teams", "Players", "Alerts"];
 
-  return <div className="modal-backdrop"><section className="onboarding-modal" role="dialog" aria-modal="true" aria-labelledby="onboarding-title"><div className="onboarding-top"><div className="auth-brand"><span className="brand-dot" />courtside</div><button className="onboarding-skip" disabled={saving} onClick={() => void complete(true)}>Skip setup</button></div><div className="onboarding-progress">{stepNames.map((name, index) => <div className={index === step ? "active" : index < step ? "complete" : ""} key={name}><span>{index < step ? "✓" : index + 1}</span><small>{name}</small></div>)}</div>{step === 0 ? <><p className="overline">STEP 1 OF 3</p><h2 id="onboarding-title">Choose your teams</h2><p className="auth-copy">Your choices shape game schedules, news, catch-ups, and alerts. You can change them anytime.</p><EntitySearch value={teamSearch} onChange={setTeamSearch} label="Search NBA teams" placeholder="Search teams by name or abbreviation" /><div className="onboarding-grid">{visibleOnboardingTeams.length > 0 ? visibleOnboardingTeams.map((team) => { const selected = teamIds.includes(team.id); return <button className={selected ? "onboarding-choice selected" : "onboarding-choice"} key={team.id} onClick={() => toggleId(team.id, teamIds, setTeamIds)}><TeamMark short={team.short} color={team.color} imageUrl={team.imageUrl} /><span><strong>{team.name}</strong><small>{recommendedTeams.has(team.id) ? "Popular pick" : team.record === "—" ? "NBA team" : `${team.record} record`}</small></span><b>{selected ? "✓" : "+"}</b></button>; }) : <div className="search-empty">No teams match “{teamSearch}”.</div>}</div></> : step === 1 ? <><p className="overline">STEP 2 OF 3</p><h2 id="onboarding-title">Choose your players</h2><p className="auth-copy">Follow players to prioritize performances, injuries, and important storylines.</p><EntitySearch value={playerSearch} onChange={setPlayerSearch} label="Search NBA players" placeholder="Search players by name, team, or position" /><div className="onboarding-grid">{visibleOnboardingPlayers.length > 0 ? visibleOnboardingPlayers.map((player) => { const selected = playerIds.includes(player.id); return <button className={selected ? "onboarding-choice selected" : "onboarding-choice"} key={player.id} onClick={() => toggleId(player.id, playerIds, setPlayerIds)}><PlayerAvatar player={player} className="preference-avatar" /><span><strong>{player.name}</strong><small>{recommendedPlayers.has(player.id) ? "Popular pick" : player.teamName}</small></span><b>{selected ? "✓" : "+"}</b></button>; }) : <div className="search-empty">No players match “{playerSearch}”.</div>}</div></> : <><p className="overline">STEP 3 OF 3</p><h2 id="onboarding-title">Choose your alerts</h2><p className="auth-copy">Start with the moments worth interrupting your day for.</p><div className="onboarding-alerts">{(Object.keys(alertLabels) as Array<keyof AlertPreferences>).map((key) => <button className={alerts[key] ? "onboarding-alert selected" : "onboarding-alert"} key={key} onClick={() => setAlerts((current) => ({ ...current, [key]: !current[key] }))}><span>{alertIcons[key]}</span><strong>{alertLabels[key]}</strong><b>{alerts[key] ? "On" : "Off"}</b></button>)}</div></>}{error && <p className="auth-error" role="alert">{error}</p>}<div className="onboarding-actions">{step > 0 ? <button className="onboarding-back" disabled={saving} onClick={() => setStep((current) => current - 1)}>← Back</button> : <span />}<div><small>{teamIds.length} teams · {playerIds.length} players</small><button className="auth-submit" disabled={saving} onClick={() => step < 2 ? setStep((current) => current + 1) : void complete()}>{saving ? "Saving…" : step < 2 ? "Continue" : "Finish setup"}<span>→</span></button></div></div></section></div>;
+  return <div className="modal-backdrop"><section className="onboarding-modal" role="dialog" aria-modal="true" aria-labelledby="onboarding-title"><div className="onboarding-top"><div className="auth-brand"><span className="brand-dot" />Sports Watch</div><button className="onboarding-skip" disabled={saving} onClick={() => void complete(true)}>Skip setup</button></div><div className="onboarding-progress">{stepNames.map((name, index) => <div className={index === step ? "active" : index < step ? "complete" : ""} key={name}><span>{index < step ? "✓" : index + 1}</span><small>{name}</small></div>)}</div>{step === 0 ? <><p className="overline">STEP 1 OF 3</p><h2 id="onboarding-title">Choose your teams</h2><p className="auth-copy">Your choices shape game schedules, news, catch-ups, and alerts. You can change them anytime.</p><EntitySearch value={teamSearch} onChange={setTeamSearch} label="Search NBA teams" placeholder="Search teams by name or abbreviation" /><div className="onboarding-grid">{visibleOnboardingTeams.length > 0 ? visibleOnboardingTeams.map((team) => { const selected = teamIds.includes(team.id); return <button className={selected ? "onboarding-choice selected" : "onboarding-choice"} key={team.id} onClick={() => toggleId(team.id, teamIds, setTeamIds)}><TeamMark short={team.short} color={team.color} imageUrl={team.imageUrl} /><span><strong>{team.name}</strong><small>{recommendedTeams.has(team.id) ? "Popular pick" : team.record === "—" ? "NBA team" : `${team.record} record`}</small></span><b>{selected ? "✓" : "+"}</b></button>; }) : <div className="search-empty">No teams match “{teamSearch}”.</div>}</div></> : step === 1 ? <><p className="overline">STEP 2 OF 3</p><h2 id="onboarding-title">Choose your players</h2><p className="auth-copy">Follow players to prioritize performances, injuries, and important storylines.</p><EntitySearch value={playerSearch} onChange={setPlayerSearch} label="Search NBA players" placeholder="Search players by name, team, or position" /><div className="onboarding-grid">{visibleOnboardingPlayers.length > 0 ? visibleOnboardingPlayers.map((player) => { const selected = playerIds.includes(player.id); return <button className={selected ? "onboarding-choice selected" : "onboarding-choice"} key={player.id} onClick={() => toggleId(player.id, playerIds, setPlayerIds)}><PlayerAvatar player={player} className="preference-avatar" /><span><strong>{player.name}</strong><small>{recommendedPlayers.has(player.id) ? "Popular pick" : player.teamName}</small></span><b>{selected ? "✓" : "+"}</b></button>; }) : <div className="search-empty">No players match “{playerSearch}”.</div>}</div></> : <><p className="overline">STEP 3 OF 3</p><h2 id="onboarding-title">Choose your alerts</h2><p className="auth-copy">Start with the moments worth interrupting your day for.</p><div className="onboarding-alerts">{(Object.keys(alertLabels) as Array<keyof AlertPreferences>).map((key) => <button className={alerts[key] ? "onboarding-alert selected" : "onboarding-alert"} key={key} onClick={() => setAlerts((current) => ({ ...current, [key]: !current[key] }))}><span>{alertIcons[key]}</span><strong>{alertLabels[key]}</strong><b>{alerts[key] ? "On" : "Off"}</b></button>)}</div></>}{error && <p className="auth-error" role="alert">{error}</p>}<div className="onboarding-actions">{step > 0 ? <button className="onboarding-back" disabled={saving} onClick={() => setStep((current) => current - 1)}>← Back</button> : <span />}<div><small>{teamIds.length} teams · {playerIds.length} players</small><button className="auth-submit" disabled={saving} onClick={() => step < 2 ? setStep((current) => current + 1) : void complete()}>{saving ? "Saving…" : step < 2 ? "Continue" : "Finish setup"}<span>→</span></button></div></div></section></div>;
 }
 
 export default function Home() {
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
-  if (!mounted) return <main className="app-boot"><div className="brand"><span className="brand-dot" />courtside</div><span className="live-loader" /><small>Loading your NBA…</small></main>;
-  return <CourtsideApp />;
+  if (!mounted) return <main className="app-boot"><div className="brand"><span className="brand-dot" />Sports Watch</div><span className="live-loader" /><small>Loading your NBA…</small></main>;
+  return <SportsWatchApp />;
 }
 
-function CourtsideApp() {
+function SportsWatchApp() {
   const today = useMemo(() => startOfDay(new Date()), []);
   const fallbackSchedule = useMemo(() => buildSchedule(), []);
   const [schedule, setSchedule] = useState<Game[]>(fallbackSchedule);
   const [teams, setTeams] = useState<Team[]>(defaultTeams);
   const [players, setPlayers] = useState<Player[]>(defaultPlayers);
   const [account, setAccount] = useState<Account>({ id: "account-demo", displayName: "Alex Morgan", email: "", timezone: "America/Los_Angeles", createdAt: "" });
+  const [theme, setTheme] = useState<ThemeMode>(() => window.localStorage.getItem("sports-watch-theme") === "light" ? "light" : "dark");
   const [authenticated, setAuthenticated] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
@@ -455,11 +502,16 @@ function CourtsideApp() {
   const [notifications, setNotifications] = useState<DeliveredAlert[]>([]);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [personalizationLoading, setPersonalizationLoading] = useState(true);
+  const [feedRefreshing, setFeedRefreshing] = useState(false);
+  const [feedRefreshStatus, setFeedRefreshStatus] = useState("");
+  const [lastFeedRefreshAt, setLastFeedRefreshAt] = useState(() => Date.now());
+  const [feedFreshnessStatus, setFeedFreshnessStatus] = useState("");
   const [preferencesSaving, setPreferencesSaving] = useState(false);
   const [preferenceStatus, setPreferenceStatus] = useState("");
   const [teamSearch, setTeamSearch] = useState("");
   const [playerSearch, setPlayerSearch] = useState("");
   const [activeNav, setActiveNav] = useState("Home");
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("account");
   const [catchUpOpen, setCatchUpOpen] = useState(false);
   const [catchUpLoading, setCatchUpLoading] = useState(false);
   const [scheduleView, setScheduleView] = useState<ScheduleView>("month");
@@ -490,6 +542,12 @@ function CourtsideApp() {
   const [savedArticlesError, setSavedArticlesError] = useState("");
 
   useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.style.colorScheme = theme;
+    window.localStorage.setItem("sports-watch-theme", theme);
+  }, [theme]);
+
+  useEffect(() => {
     let mounted = true;
     Promise.all([
       fetchJson<{ data: ApiGame[] }>("/api/games"),
@@ -508,7 +566,7 @@ function CourtsideApp() {
       setAuthenticated(accountPayload.meta.authenticated);
       setOnboardingOpen(accountPayload.meta.authenticated && !accountPayload.meta.onboardingCompleted);
       setPreferences(preferencesPayload.data);
-      setFeedItems(feedPayload.data);
+      setFeedItems(newestFeedFirst(feedPayload.data));
       setTeams(catalogPayload.data.teams);
       setPlayers(catalogPayload.data.players);
       setDiscovery(discoveryPayload.data);
@@ -522,6 +580,27 @@ function CourtsideApp() {
     });
     return () => { mounted = false; };
   }, []);
+
+  useEffect(() => {
+    let thresholdTimer: number | undefined;
+    const updateFreshness = () => {
+      if (thresholdTimer !== undefined) window.clearTimeout(thresholdTimer);
+      const now = Date.now();
+      const elapsed = Math.max(0, now - lastFeedRefreshAt);
+      setFeedFreshnessStatus(feedFreshnessLabel(lastFeedRefreshAt, now));
+      const nextThreshold = feedFreshnessThresholdsMs.find((threshold) => threshold > elapsed);
+      if (nextThreshold !== undefined) thresholdTimer = window.setTimeout(updateFreshness, Math.max(100, nextThreshold - elapsed + 50));
+    };
+    const updateWhenVisible = () => { if (document.visibilityState === "visible") updateFreshness(); };
+    updateFreshness();
+    window.addEventListener("focus", updateFreshness);
+    document.addEventListener("visibilitychange", updateWhenVisible);
+    return () => {
+      if (thresholdTimer !== undefined) window.clearTimeout(thresholdTimer);
+      window.removeEventListener("focus", updateFreshness);
+      document.removeEventListener("visibilitychange", updateWhenVisible);
+    };
+  }, [lastFeedRefreshAt]);
 
   useEffect(() => {
     if (!selectedGameId) return;
@@ -570,7 +649,9 @@ function CourtsideApp() {
         fetchJson<{ data: CatchUpBrief }>("/api/catch-up"),
         fetchJson<{ data: DeliveredAlert[] }>("/api/alerts", { method: "POST" }).then(() => fetchJson<{ data: DeliveredAlert[] }>("/api/alerts")),
       ]);
-      setFeedItems(feedPayload.data);
+      setFeedItems(newestFeedFirst(feedPayload.data));
+      setLastFeedRefreshAt(Date.now());
+      setFeedFreshnessStatus("");
       setDiscovery(discoveryPayload.data);
       setCatchUpBrief(catchUpPayload.data);
       setNotifications(alertsPayload.data);
@@ -592,6 +673,27 @@ function CourtsideApp() {
     void persistPreferences({ ...preferences, followedPlayerIds });
   };
   const toggleAlert = (key: keyof AlertPreferences) => void persistPreferences({ ...preferences, alerts: { ...preferences.alerts, [key]: !preferences.alerts[key] } });
+  const refreshFeed = async () => {
+    if (feedRefreshing) return;
+    const previousIds = new Set(feedItems.map((item) => item.id));
+    setFeedRefreshing(true);
+    setFeedRefreshStatus("Checking for new updates…");
+    try {
+      const payload = await fetchJson<{ data: FeedItem[]; meta: { refreshStatus: "refreshed" | "cached" } }>("/api/feed", { method: "POST", cache: "no-store" });
+      const nextItems = newestFeedFirst(payload.data);
+      const newCount = nextItems.filter((item) => !previousIds.has(item.id)).length;
+      setFeedItems(nextItems);
+      setLastFeedRefreshAt(Date.now());
+      setFeedFreshnessStatus("");
+      setFeedRefreshStatus(newCount > 0
+        ? `${newCount} new update${newCount === 1 ? "" : "s"} added.`
+        : payload.meta.refreshStatus === "cached" ? "Checked recently — feed is current." : "No new updates yet.");
+    } catch (refreshError) {
+      setFeedRefreshStatus(refreshError instanceof Error ? refreshError.message : "Could not refresh the feed. Cached updates are still shown.");
+    } finally {
+      setFeedRefreshing(false);
+    }
+  };
   const markAllNotificationsRead = async () => {
     await fetchJson("/api/alerts", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ all: true }) });
     setNotifications((current) => current.map((notification) => ({ ...notification, read: true, readAt: notification.readAt ?? new Date().toISOString() })));
@@ -752,21 +854,21 @@ function CourtsideApp() {
 
   return <main className="app-shell">
     <aside className="sidebar">
-      <div className="brand"><span className="brand-dot" />courtside</div>
+      <div className="brand"><span className="brand-dot" />Sports Watch</div>
       <div className="sidebar-section-label">Workspace</div>
       <nav className="main-nav" aria-label="Main navigation">{["Home", "Schedule", "Live games", "My teams", "My players", "Saved"].map((item) => <button className={activeNav === item || (item === "My teams" && activeNav === "Team profile") || (item === "My players" && activeNav === "Player profile") || (item === "Saved" && activeNav === "Article" && articleBackNav === "Saved") ? "nav-item active" : "nav-item"} onClick={() => setActiveNav(item)} key={item}><span className="nav-icon">{item === "Home" ? "⌂" : item === "Schedule" ? "▦" : item === "Live games" ? "◉" : item === "My teams" ? "◈" : item === "My players" ? "♙" : "◇"}</span>{item}{item === "Live games" && liveGames.length > 0 && <span className="live-pill">{liveGames.length}</span>}{item === "Saved" && savedArticles.length > 0 && <span className="saved-pill">{savedArticles.length}</span>}</button>)}</nav>
       <div className="sidebar-section-label following-label">Following</div>
-      <div className="following-list">{followedTeams.slice(0, 2).map((team) => <button className="following-row following-team" key={team.id} onClick={() => void openTeamProfile(team.id)}><TeamMark short={team.short} color={team.color} imageUrl={team.imageUrl} /><span>{team.name.replace(/^(Golden State|New York|Oklahoma City) /, "")}</span></button>)}{followedPlayers.slice(0, 2).map((player) => <button className="following-row following-player" key={player.id} onClick={() => void openPlayerProfile(player.id)}><PlayerAvatar player={player} className="small-avatar" /><span>{player.name}</span></button>)}{followedTeams.length === 0 && followedPlayers.length === 0 && <div className="following-empty">Nothing followed yet</div>}<button className="add-following" onClick={() => setActiveNav("My teams")}>＋ Manage following</button></div>
-      <div className="sidebar-bottom"><button className="nav-item" onClick={() => setActiveNav("My teams")}><span className="nav-icon">⚙</span>Preferences</button><div className="profile"><span className="avatar profile-avatar">{initialsFor(account.displayName)}</span><span><strong>{account.displayName}</strong><small>{authenticated ? account.email : "Shared demo mode"}</small></span>{authenticated ? <button className="profile-action" onClick={() => void signOut()}>Sign out</button> : <button className="profile-action" onClick={() => setAuthOpen(true)}>Sign in</button>}</div></div>
+      <div className="following-list">{followedTeams.slice(0, 2).map((team) => <button className="following-row following-team" key={team.id} onClick={() => void openTeamProfile(team.id)}><TeamMark short={team.short} color={team.color} imageUrl={team.imageUrl} /><span>{team.name.replace(/^(Golden State|New York|Oklahoma City) /, "")}</span></button>)}{followedPlayers.slice(0, 2).map((player) => <button className="following-row following-player" key={player.id} onClick={() => void openPlayerProfile(player.id)}><PlayerAvatar player={player} className="small-avatar" /><span>{player.name}</span></button>)}{followedTeams.length === 0 && followedPlayers.length === 0 && <div className="following-empty">Nothing followed yet</div>}<button className="add-following" onClick={() => { setSettingsSection("preferences"); setActiveNav("Settings"); }}>＋ Manage following</button></div>
+      <div className="sidebar-bottom"><button className={activeNav === "Settings" ? "nav-item active" : "nav-item"} onClick={() => { setSettingsSection("account"); setActiveNav("Settings"); }}><span className="nav-icon">⚙</span>Settings</button><div className="profile"><span className="avatar profile-avatar">{initialsFor(account.displayName)}</span><span><strong>{account.displayName}</strong><small>{authenticated ? account.email : "Shared demo mode"}</small></span>{authenticated ? <button className="profile-action" onClick={() => void signOut()}>Sign out</button> : <button className="profile-action" onClick={() => setAuthOpen(true)}>Sign in</button>}</div></div>
     </aside>
 
     <section className="content-area">
-      <header className="topbar"><div className="mobile-brand"><span className="brand-dot" />courtside</div><div className="date-label">{today.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}</div><div className="top-actions">{!authenticated && <button className="top-auth-button" onClick={() => setAuthOpen(true)}>Sign in</button>}<button className="icon-button" aria-label="Search">⌕</button><div className="notification-menu"><button className="notification-button" aria-label={`${unreadCount} unread notifications`} aria-expanded={notificationsOpen} onClick={() => setNotificationsOpen((open) => !open)}>♧{unreadCount > 0 && <span />}</button>{notificationsOpen && <section className="notification-panel" aria-label="Notifications"><div className="notification-header"><div><p className="overline">ALERT INBOX</p><h2>Notifications</h2></div>{unreadCount > 0 && <button onClick={() => void markAllNotificationsRead()}>Mark all read</button>}</div>{notifications.length > 0 ? <div className="notification-list">{notifications.map((notification) => <article className={notification.read ? "notification-row read" : "notification-row"} key={notification.id}><span className="notification-kind">{alertIcons[notification.type]}</span><div><p>{alertLabels[notification.type]} · {formatRelativeTime(notification.deliveredAt)}</p><strong>{notification.title}</strong><span>{notification.body}</span></div></article>)}</div> : <div className="notification-empty">No alerts yet. The worker will add important updates here.</div>}</section>}</div></div></header>
-      <nav className="mobile-nav" aria-label="Mobile navigation">{[["Home", "⌂"], ["Schedule", "▦"], ["Live games", "◉"], ["My teams", "◈"], ["My players", "♙"], ["Saved", "◇"]].map(([item, icon]) => <button className={activeNav === item || (item === "My teams" && activeNav === "Team profile") || (item === "My players" && activeNav === "Player profile") || (item === "Saved" && activeNav === "Article" && articleBackNav === "Saved") ? "active" : ""} onClick={() => setActiveNav(item)} key={item}><span>{icon}</span>{item === "Live games" ? "Live" : item === "My teams" ? "Teams" : item === "My players" ? "Players" : item}</button>)}</nav>
+      <header className="topbar"><div className="mobile-brand"><span className="brand-dot" />Sports Watch</div><div className="date-label">{today.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}</div><div className="top-actions">{!authenticated && <button className="top-auth-button" onClick={() => setAuthOpen(true)}>Sign in</button>}<button className="icon-button" aria-label="Search">⌕</button><div className="notification-menu"><button className="notification-button" aria-label={`${unreadCount} unread notifications`} aria-expanded={notificationsOpen} onClick={() => setNotificationsOpen((open) => !open)}>♧{unreadCount > 0 && <span />}</button>{notificationsOpen && <section className="notification-panel" aria-label="Notifications"><div className="notification-header"><div><p className="overline">ALERT INBOX</p><h2>Notifications</h2></div>{unreadCount > 0 && <button onClick={() => void markAllNotificationsRead()}>Mark all read</button>}</div>{notifications.length > 0 ? <div className="notification-list">{notifications.map((notification) => <article className={notification.read ? "notification-row read" : "notification-row"} key={notification.id}><span className="notification-kind">{alertIcons[notification.type]}</span><div><p>{alertLabels[notification.type]} · {formatRelativeTime(notification.deliveredAt)}</p><strong>{notification.title}</strong><span>{notification.body}</span></div></article>)}</div> : <div className="notification-empty">No alerts yet. The worker will add important updates here.</div>}</section>}</div></div></header>
+      <nav className="mobile-nav" aria-label="Mobile navigation">{[["Home", "⌂"], ["Schedule", "▦"], ["Live games", "◉"], ["My teams", "◈"], ["My players", "♙"], ["Saved", "◇"], ["Settings", "⚙"]].map(([item, icon]) => <button className={activeNav === item || (item === "My teams" && activeNav === "Team profile") || (item === "My players" && activeNav === "Player profile") || (item === "Saved" && activeNav === "Article" && articleBackNav === "Saved") ? "active" : ""} onClick={() => { if (item === "Settings") setSettingsSection("account"); setActiveNav(item); }} key={item}><span>{icon}</span>{item === "Live games" ? "Live" : item === "My teams" ? "Teams" : item === "My players" ? "Players" : item}</button>)}</nav>
 
       {activeNav === "Home" ? <>
         <div className="welcome-row"><div><p className="overline">YOUR NBA, IN FOCUS</p><h1>Good morning, {account.displayName.split(" ")[0]} <span>✦</span></h1><p className="subhead">Here&apos;s what matters across the teams and players you follow.</p></div><button className="catch-up-button" onClick={() => void openCatchUp()} disabled={!catchUpBrief || catchUpLoading}><span>✦</span><span><strong>{catchUpLoading ? "Building recap…" : "Catch me up"}</strong><small>{catchUpBrief?.readTimeMinutes ?? 1} min read</small></span><b>→</b></button></div>
-        <div className="dashboard-grid"><div className="feed-column"><div className="section-heading"><div><h2>{hasPersonalization ? "Your feed" : "Popular right now"}</h2><p className="feed-subtitle">{hasPersonalization ? "Ranked for your current favorites" : "League-wide stories to get you started"}</p></div><span className="feed-count">{feedItems.length} updates</span></div><div className="feed-list">{personalizationLoading ? <div className="feed-state">Building your personalized feed…</div> : feedItems.length === 0 ? <div className="feed-state"><strong>No current NBA stories are available.</strong><span>Fresh updates will appear here after the next data sync.</span><button onClick={() => setActiveNav("My teams")}>Choose favorites</button></div> : feedItems.map((item) => <article className={`feed-card ${item.accent}`} key={item.id}><div className="feed-icon">{item.kind === "performance" ? "◉" : item.kind === "injury" ? "!" : "✦"}</div><div className="feed-content"><div className="feed-card-top"><p className="card-eyebrow">{item.eyebrow} · {formatRelativeTime(item.publishedAt)}</p><span className="relevance-score">{item.relevanceScore}% {hasPersonalization ? "match" : "popular"}</span></div><h3>{item.title}</h3><p className="card-body">{item.body}</p><div className="feed-meta"><span>{item.reason}</span><button onClick={() => void openArticle(item.id, "Home")}>Read story <span>→</span></button></div></div></article>)}</div></div>
+        <div className="dashboard-grid"><div className="feed-column"><div className="section-heading feed-heading"><div><h2>{hasPersonalization ? "Your feed" : "Popular right now"}</h2><p className="feed-subtitle">{hasPersonalization ? "Ranked for your current favorites" : "League-wide stories to get you started"}</p>{feedRefreshStatus && <p className="feed-refresh-status" aria-live="polite">{feedRefreshStatus}</p>}{feedFreshnessStatus && <p className="feed-freshness-status" aria-live="polite">{feedFreshnessStatus}</p>}</div><div className="feed-heading-actions"><span className="feed-count">{feedItems.length} updates</span><button className="feed-refresh-button" disabled={feedRefreshing || personalizationLoading} onClick={() => void refreshFeed()}><span className={feedRefreshing ? "refresh-icon spinning" : "refresh-icon"}>↻</span>{feedRefreshing ? "Checking…" : "Refresh"}</button></div></div><div className="feed-list" tabIndex={0} aria-label={hasPersonalization ? "Your personalized news feed" : "Popular NBA news feed"}>{personalizationLoading ? <div className="feed-state">Building your personalized feed…</div> : feedItems.length === 0 ? <div className="feed-state"><strong>No current NBA stories are available.</strong><span>Fresh updates will appear here after the next data sync.</span><button onClick={() => setActiveNav("My teams")}>Choose favorites</button></div> : feedItems.map((item) => <article className={`feed-card ${item.accent}`} key={item.id}><div className="feed-icon">{item.kind === "performance" ? "◉" : item.kind === "injury" ? "!" : "✦"}</div><div className="feed-content"><div className="feed-card-top"><p className="card-eyebrow">{item.eyebrow} · {formatRelativeTime(item.publishedAt)}</p><span className="relevance-score">{item.relevanceScore}% {hasPersonalization ? "match" : "popular"}</span></div><h3>{item.title}</h3><p className="card-body">{item.body}</p><div className="feed-meta"><span>{item.reason}</span><button onClick={() => void openArticle(item.id, "Home")}>Read story <span>→</span></button></div></div></article>)}</div></div>
           <div className="right-column">
             {featuredLiveGame ? <LiveGameCard game={featuredLiveGame} onOpen={() => openGameCenter(featuredLiveGame.id)} /> : <section className="section-card"><div className="mini-empty">There are no live games right now.</div></section>}
             <section className="section-card"><div className="section-heading compact"><h2>{hasPersonalization ? "Upcoming for you" : "Popular upcoming games"}</h2><button className="text-button" onClick={() => setActiveNav("Schedule")}>View schedule <span>→</span></button></div>{homeUpcomingGames.length > 0 ? homeUpcomingGames.map((game) => { const gameDate = new Date(`${game.date}T12:00:00`); return <div className="upcoming-game" key={game.id}><div className="upcoming-date"><strong>{gameDate.toLocaleDateString("en-US", { weekday: "short" }).toUpperCase()}</strong><span>{gameDate.toLocaleDateString("en-US", { month: "short", day: "numeric" }).toUpperCase()}</span></div><div className="upcoming-teams"><div><TeamMark short={game.awayShort} color={game.awayColor} imageUrl={game.awayImageUrl} /><span>{game.awayShort}</span></div><b>{formatPacificTipTime(game.startsAt, game.time)}</b><div><TeamMark short={game.homeShort} color={game.homeColor} imageUrl={game.homeImageUrl} /><span>{game.homeShort}</span></div></div><span className="tv-badge">{game.network}</span></div>; }) : <div className="mini-empty">There are no upcoming games available.</div>}</section>
@@ -788,7 +890,7 @@ function CourtsideApp() {
           <div className="preference-block"><div className="section-heading"><div><h2>Your players</h2><p className="panel-copy">Players you follow and use to personalize your experience.</p></div><span className="count-badge">{followedPlayers.length} followed</span></div><div className="preference-list">{followedPlayers.length > 0 ? followedPlayers.map((player) => <div className="preference-row selected player-preference-row" key={player.id}><button className="player-row-profile" onClick={() => void openPlayerProfile(player.id)}><PlayerAvatar player={player} className="preference-avatar" /><span><strong>{player.name}</strong><small>{player.teamName} · {player.position}</small></span></button><button className="row-follow-action" disabled={preferencesSaving} onClick={() => togglePlayer(player.id)}>Unfollow</button></div>) : <div className="discovery-empty">You are not following any players yet. Add one from the recommendations.</div>}</div></div>
           <div className="preference-block recommendation-block"><div className="section-heading"><div><h2>{hasPersonalization ? "Players you may like" : "Popular players"}</h2><p className="panel-copy">{hasPersonalization ? "Personalized candidates first, then popular players to fill up to eight spots." : "Trending across recent NBA updates and high-visibility matchups."}</p></div><span className="count-badge">{playerSearchActive ? `${playerSearchMatches.length} result${playerSearchMatches.length === 1 ? "" : "s"}` : `${discovery.players.length}/8`}</span></div><EntitySearch value={playerSearch} onChange={setPlayerSearch} label="Search NBA players" placeholder="Search all players by name, team, or position" /><div className="preference-list">{visiblePlayerSuggestions.length > 0 ? visiblePlayerSuggestions.map(({ player, score, reason }) => { const followed = preferences.followedPlayerIds.includes(player.id); return <div className="recommendation-row player-recommendation-row" key={player.id}><button className="recommendation-profile" onClick={() => void openPlayerProfile(player.id)}><PlayerAvatar player={player} className="preference-avatar" /><span><strong>{player.name}</strong><small>{reason}</small></span></button>{score !== null && <span className="recommendation-score">{score}%</span>}<button className={followed ? "following-result" : ""} disabled={preferencesSaving || followed} onClick={() => togglePlayer(player.id)}>{followed ? "Following" : "Follow"}</button></div>; }) : <div className="discovery-empty">{playerSearchActive ? `No players match “${playerSearch}”.` : "You already follow every available player recommendation."}</div>}</div></div>
         </section>
-      </> : <>
+      </> : activeNav === "Settings" ? <SettingsView account={account} authenticated={authenticated} teams={teams} players={players} preferences={preferences} savingPreferences={preferencesSaving} theme={theme} section={settingsSection} onSectionChange={setSettingsSection} onThemeChange={setTheme} onAccountUpdated={setAccount} onToggleTeam={toggleTeam} onTogglePlayer={togglePlayer} onSignIn={() => setAuthOpen(true)} /> : <>
         <div className="page-heading"><p className="overline">GAME CENTER</p><h1>Live games</h1><p className="subhead">Follow scores, every play, and the moments changing the game.</p></div>{liveGames.length > 0 ? <section className="live-games-grid">{liveGames.map((game) => <LiveGameCard game={game} key={game.id} onOpen={() => openGameCenter(game.id)} />)}</section> : !selectedGameId && <section className="feed-state"><strong>No games are live right now.</strong><span>Upcoming games are still available in your schedule.</span><button onClick={() => setActiveNav("Schedule")}>View schedule</button></section>}{selectedGameId && <GameCenterPanel center={gameCenter} loading={gameCenterLoading} refreshing={gameCenterRefreshing} catchUpLoading={catchUpLoading} error={gameCenterError} onClose={closeGameCenter} onRetry={() => setGameCenterRefreshKey((key) => key + 1)} onCatchUp={() => void openCatchUp(selectedGameId)} />}
       </>}
     </section>

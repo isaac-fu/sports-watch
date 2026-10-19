@@ -1,4 +1,5 @@
 import { loadCatalog } from "@/lib/catalog-repository";
+import { publicCache } from "@/lib/http-cache";
 
 export const dynamic = "force-dynamic";
 
@@ -7,5 +8,5 @@ export async function GET() {
   return Response.json({
     data: { teams: catalog.teams, players: catalog.players },
     meta: { teamCount: catalog.teams.length, playerCount: catalog.players.length, source: catalog.source, syncedAt: catalog.syncedAt },
-  });
+  }, { headers: publicCache(300, 1800) });
 }

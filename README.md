@@ -1,6 +1,6 @@
-# Sports Watch / Courtside
+# Sports Watch
 
-Courtside is the first vertical slice of a personalized NBA companion: follow the teams and players you care about, see a focused feed, monitor a live game, and catch up on what you missed.
+Sports Watch is a personalized NBA companion: follow the teams and players you care about, see a focused feed, monitor a live game, and catch up on what you missed.
 
 ## Run locally
 
@@ -139,7 +139,8 @@ BALLDONTLIE requires an API key and exposes date-filtered NBA games through `/v1
 The data-sync worker can populate the same APIs and recommendation pipeline with external data. Configure any providers you have credentials for in `.env`:
 
 ```dotenv
-NEWS_DATA_PROVIDER=newsapi
+NEWS_DATA_PROVIDER=rss-newsapi
+NBA_RSS_FEED_URLS=https://www.espn.com/espn/rss/nba/news,https://www.cbssports.com/rss/headlines/nba
 NEWS_API_KEY=your-newsapi-key
 STATS_DATA_PROVIDER=nba_api
 CATALOG_DATA_PROVIDER=nba_api
@@ -147,6 +148,6 @@ BALLDONTLIE_API_KEY=your-balldontlie-key
 DATA_SYNC_WORKER_TOKEN=replace-with-a-long-random-secret
 ```
 
-The catalog sync imports provider teams and active players, reconciles them to stable app IDs, and stores provider IDs in PostgreSQL. Existing curated team logos and player headshots are retained when identities match; newly discovered entities use the initials/color fallback until artwork is curated. NewsAPI articles are tagged only after the catalog is current. `nba_api` is the recommended stats/catalog option for local and beta use; BALLDONTLIE remains supported for games, catalog, and stats when the account tier exposes the necessary endpoints. Both stats adapters combine current and prior-season game logs to produce a true latest-10 list before a new season has enough games. If a provider fails or returns no usable data, that domain falls back to the static/mock dataset and records the fallback in `GET /api/ingestion/sync`.
+The catalog sync imports provider teams and active players, reconciles them to stable app IDs, and stores provider IDs in PostgreSQL. Existing curated artwork is retained; newly discovered `nba_api` teams and players receive NBA CDN logos and headshots automatically. NBA-focused RSS/Atom feeds are the primary news source, while NewsAPI.org is an optional secondary backfill when `NEWS_API_KEY` is configured. Feed failures are isolated, cross-source duplicates are removed, and every article passes through the NBA team/player classifier after the catalog is current. `NBA_RSS_FEED_URLS` accepts a comma-separated list, so publisher feeds can be changed without rebuilding the app. `nba_api` is the recommended stats/catalog option for local and beta use; BALLDONTLIE remains supported for games, catalog, and stats when the account tier exposes the necessary endpoints. Both stats adapters combine current and prior-season game logs to produce a true latest-10 list before a new season has enough games. If every live news source fails or returns no usable data, the last cached news remains available and other domains fall back to their static/mock dataset.
 
 `POST /api/ingestion/sync` accepts the `x-worker-token` header. Docker Compose supplies `DATA_SYNC_WORKER_TOKEN` to both the web service and the sync worker; production deployments should replace the local default with a long random secret.

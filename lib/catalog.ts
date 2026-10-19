@@ -43,6 +43,19 @@ export function replaceCanonicalCatalog(catalog: Catalog) {
 
 const normalizedName = (value: string) => value.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/gi, " ").trim().toLowerCase();
 const slug = (value: string) => normalizedName(value).replace(/\s+/g, "-") || "entity";
+const espnTeamCodes: Record<string, string> = {
+  ATL: "atl", BOS: "bos", BKN: "bkn", CHA: "cha", CHI: "chi", CLE: "cle", DAL: "dal", DEN: "den", DET: "det", GSW: "gs",
+  HOU: "hou", IND: "ind", LAC: "lac", LAL: "lal", MEM: "mem", MIA: "mia", MIL: "mil", MIN: "min", NOP: "no", NYK: "ny",
+  OKC: "okc", ORL: "orl", PHI: "phi", PHX: "phx", POR: "por", SAC: "sac", SAS: "sa", TOR: "tor", UTA: "utah", WAS: "wsh",
+};
+
+const teamImageFor = (provider: string, providerId: string, short: string) => provider === "nba_api"
+  ? `https://cdn.nba.com/logos/nba/${providerId}/global/L/logo.svg`
+  : espnTeamCodes[short.toUpperCase()] ? `https://a.espncdn.com/i/teamlogos/nba/500/${espnTeamCodes[short.toUpperCase()]}.png` : undefined;
+
+const playerImageFor = (provider: string, providerId: string) => provider === "nba_api"
+  ? `https://cdn.nba.com/headshots/nba/latest/1040x760/${providerId}.png`
+  : undefined;
 
 function uniqueId(preferred: string, providerId: string, usedIds: Set<string>) {
   if (!usedIds.has(preferred)) return preferred;
@@ -68,6 +81,7 @@ export function reconcileProviderCatalog(provider: string, incoming: ProviderCat
       id,
       name: incomingTeam.name,
       short: incomingTeam.short.toUpperCase(),
+      imageUrl: known?.imageUrl ?? teamImageFor(provider, incomingTeam.providerId, incomingTeam.short),
       providerIds: { ...known?.providerIds, [provider]: incomingTeam.providerId },
     } satisfies Team;
   });
@@ -90,6 +104,7 @@ export function reconcileProviderCatalog(provider: string, incoming: ProviderCat
       teamId: team.id,
       teamName: team.name,
       position: incomingPlayer.position ? positionName(incomingPlayer.position) : known?.position ?? "Player",
+      imageUrl: known?.imageUrl ?? playerImageFor(provider, incomingPlayer.providerId),
       providerIds: { ...known?.providerIds, [provider]: incomingPlayer.providerId },
     } satisfies Player];
   });

@@ -1,0 +1,7 @@
+for team profiles, for each of the 5 main stats displayed for the season, please display the ranking in the league for each of this stats
+
+for current season stats, please display ranking for each of the stats as long as the stats themselves (see if it's more feasible to display this using apis or calculating the ranking ourselves for the season)
+
+standings section for the current season in a section labeled on the left side (if current season hasn't started yet, display standings from last season)
+
+remove the WORKSPACE label entirely, just having the section tabs and their labels is enough

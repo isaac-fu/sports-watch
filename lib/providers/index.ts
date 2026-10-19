@@ -2,6 +2,8 @@ import { BallDontLieProvider } from "./balldontlie-provider";
 import { mockProvider } from "./mock-provider";
 import type { CatalogProvider, NbaProvider } from "./types";
 import { mockNewsProvider, NewsApiProvider, type NewsProvider } from "./news-provider";
+import { CompositeNewsProvider } from "./composite-news-provider";
+import { RssNewsProvider } from "./rss-news-provider";
 import { BallDontLieStatsProvider, mockStatsProvider, type StatsProvider } from "./stats-provider";
 import { NbaApiProvider } from "./nba-api-provider";
 
@@ -28,9 +30,13 @@ export function getCatalogProvider(): CatalogProvider | null {
 }
 
 export function getNewsProvider(): NewsProvider {
-  const apiKey = process.env.NEWS_API_KEY;
-  if (process.env.NEWS_DATA_PROVIDER === "newsapi" && apiKey) return new NewsApiProvider(apiKey, process.env.NEWS_API_BASE_URL);
-  return mockNewsProvider;
+  const selected = process.env.NEWS_DATA_PROVIDER ?? "rss-newsapi";
+  const rss = new RssNewsProvider();
+  const newsApi = process.env.NEWS_API_KEY ? new NewsApiProvider(process.env.NEWS_API_KEY, process.env.NEWS_API_BASE_URL) : null;
+  if (selected === "mock") return mockNewsProvider;
+  if (selected === "newsapi") return newsApi ?? rss;
+  if (selected === "rss") return rss;
+  return newsApi ? new CompositeNewsProvider([rss, newsApi]) : rss;
 }
 
 export function getStatsProvider(): StatsProvider {

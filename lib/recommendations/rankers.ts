@@ -28,7 +28,7 @@ export function rankNewsCandidates(candidates: NewsCandidate[]): FeedItem[] {
       reason,
       relevanceScore,
     };
-  }).sort((left, right) => right.relevanceScore - left.relevanceScore || new Date(right.publishedAt).getTime() - new Date(left.publishedAt).getTime());
+  }).sort((left, right) => new Date(right.publishedAt).getTime() - new Date(left.publishedAt).getTime() || right.relevanceScore - left.relevanceScore);
 
   const seenTitles = new Set<string>();
   return ranked.filter((item) => {

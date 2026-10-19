@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { NewsArticle } from "@/lib/models";
 import { canonicalPlayers, canonicalTeams } from "@/lib/catalog";
 import { mockNews } from "@/lib/mock-repository";
+import { classifyAndTagNews } from "@/lib/news-classifier";
 
 export interface NewsProvider {
   readonly name: string;
@@ -19,26 +20,14 @@ type NewsApiArticle = {
 };
 
 type NewsApiResponse = { status?: string; articles?: NewsApiArticle[]; message?: string };
-
-const normalized = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-
-function classifyArticle(article: NewsApiArticle) {
-  const text = normalized(`${article.title ?? ""} ${article.description ?? ""} ${article.content ?? ""}`);
-  const teamIds = canonicalTeams.filter((team) => {
-    const names = [team.name, team.short, team.name.split(" ").at(-1) ?? ""];
-    return names.some((name) => name.length > 2 && text.includes(normalized(name)));
-  }).map((team) => team.id);
-  const playerIds = canonicalPlayers.filter((player) => text.includes(normalized(player.name))).map((player) => player.id);
-  const tags = ["nba"];
-  if (/\b(injur|sprain|strain|out for|questionable|doubtful)\w*\b/.test(text)) tags.push("injury");
-  if (/\b(trade|sign|waive|contract|roster)\w*\b/.test(text)) tags.push("roster");
-  if (/\b(score|win|loss|defeat|points|assists|rebounds|recap)\w*\b/.test(text)) tags.push("performance");
-  return { teamIds, playerIds, tags };
+function classifyText(...parts: Array<string | undefined>) {
+  return classifyAndTagNews(parts, canonicalTeams, canonicalPlayers);
 }
 
 function mapArticle(article: NewsApiArticle): NewsArticle | null {
   if (!article.title || !article.url || !article.publishedAt) return null;
-  const classified = classifyArticle(article);
+  const classified = classifyText(article.title, article.description, article.content, article.url, article.source?.name);
+  if (!classified.nbaRelated) return null;
   return {
     id: `newsapi-${createHash("sha256").update(article.url).digest("hex").slice(0, 20)}`,
     title: article.title,
@@ -47,7 +36,9 @@ function mapArticle(article: NewsApiArticle): NewsArticle | null {
     publishedAt: new Date(article.publishedAt).toISOString(),
     url: article.url,
     imageUrl: article.urlToImage || undefined,
-    ...classified,
+    teamIds: classified.teamIds,
+    playerIds: classified.playerIds,
+    tags: classified.tags,
   };
 }
 
