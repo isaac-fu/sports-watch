@@ -3,7 +3,7 @@ import { canonicalPlayers, canonicalTeams } from "@/lib/catalog";
 import { generateNewsCandidates } from "@/lib/recommendations/candidate-generators";
 import { getPersonalizedFeed } from "@/lib/recommendations/service";
 import { rankAlertCandidates, rankNewsCandidates } from "@/lib/recommendations/rankers";
-import type { AlertCandidate, NewsArticle, Preferences } from "@/lib/models";
+import type { AlertCandidate, NewsArticle, Preferences, SavedArticle } from "@/lib/models";
 
 const preferences: Preferences = {
   followedTeamIds: ["gsw"],
@@ -101,5 +101,14 @@ describe("recommendation ranking", () => {
     expect(ranked).toHaveLength(20);
     expect(ranked[0].candidateId).toBe("alert-24");
     expect(ranked.at(-1)?.candidateId).toBe("alert-5");
+  });
+
+  it("uses saved stories as interest signals without recommending the saved item again", () => {
+    const saved: SavedArticle = { id: "saved-okc", title: "Thunder roster preview", summary: "Oklahoma City prepares for the season.", source: "NBA Wire", publishedAt: "2026-10-18T08:00:00.000Z", savedAt: "2026-10-18T09:00:00.000Z", url: "https://example.com/saved", teamIds: ["okc"], playerIds: ["shai-gilgeous-alexander"], tags: ["storyline"] };
+    const related: NewsArticle = { id: "new-okc", title: "Gilgeous-Alexander leads practice", summary: "The Thunder star stood out in the latest session.", source: "NBA Wire", publishedAt: "2026-10-19T10:00:00.000Z", url: "https://example.com/new-okc", teamIds: ["okc"], playerIds: ["shai-gilgeous-alexander"], tags: ["performance"] };
+    const feed = getPersonalizedFeed({ ...preferences, followedTeamIds: [], followedPlayerIds: [] }, [saved, related], [saved]);
+    expect(feed.map((item) => item.id)).toEqual(["new-okc"]);
+    expect(feed[0].reason).toBe("Based on NBA stories you saved");
+    expect(feed[0].relevanceScore).toBeGreaterThan(50);
   });
 });

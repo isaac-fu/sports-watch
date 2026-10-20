@@ -1,6 +1,7 @@
 import type { NewsArticle, PlayerStat, SyncResult, TeamStat } from "./models";
 import { getDbPool } from "./db";
 import { mockNews, mockPlayerStats, mockTeamStats } from "./mock-repository";
+import { cleanNewsArticle } from "./news-text";
 
 type NewsSnapshot = { articles: NewsArticle[]; source: string; syncedAt: string | null };
 type StatsSnapshot = { players: PlayerStat[]; teams: TeamStat[]; source: string; syncedAt: string | null };
@@ -76,7 +77,7 @@ async function ensureContentTables() {
   await globalThis.__courtsideContentTables;
 }
 
-const articleFromRow = (row: Record<string, unknown>): NewsArticle => ({
+const articleFromRow = (row: Record<string, unknown>): NewsArticle => cleanNewsArticle({
   id: String(row.id), title: String(row.title), summary: String(row.summary), source: String(row.source),
   publishedAt: new Date(String(row.published_at)).toISOString(), url: String(row.url),
   imageUrl: row.image_url ? String(row.image_url) : undefined,
@@ -124,7 +125,8 @@ export async function loadNewsArticles(): Promise<NewsSnapshot> {
       };
     } catch { /* memory and mock fallback below */ }
   }
-  return cache.news ?? { articles: mockNews, source: "mock-repository", syncedAt: null };
+  const snapshot = cache.news ?? { articles: mockNews, source: "mock-repository", syncedAt: null };
+  return { ...snapshot, articles: snapshot.articles.map(cleanNewsArticle) };
 }
 
 export async function saveSeasonStats(season: number, stats: { players: PlayerStat[]; teams: TeamStat[] }, provider: string) {

@@ -1,4 +1,4 @@
-import type { Game, GameEvent, NewsArticle, Player, Team } from "@/lib/models";
+import type { Game, GameEvent, NewsArticle, Player, SavedArticle, Team } from "@/lib/models";
 
 export type NewsCandidate = {
   article: NewsArticle;
@@ -7,7 +7,8 @@ export type NewsCandidate = {
   freshnessHours: number;
   importanceScore: number;
   sourceQualityScore: number;
-  sources: Array<"followed-team" | "followed-player" | "important-league-update" | "popular-league-update">;
+  savedInterestScore: number;
+  sources: Array<"followed-team" | "followed-player" | "saved-interest" | "important-league-update" | "popular-league-update">;
 };
 
 export type TeamCandidate = {
@@ -16,6 +17,7 @@ export type TeamCandidate = {
   upcomingOpponentCount: number;
   articleMentionCount: number;
   nationalGameCount: number;
+  savedArticleMentionCount: number;
   coldStart: boolean;
 };
 
@@ -25,6 +27,7 @@ export type PlayerCandidate = {
   upcomingOpponent: boolean;
   articleMentionCount: number;
   teamNationalGameCount: number;
+  savedArticleMentionCount: number;
   coldStart: boolean;
 };
 
@@ -52,4 +55,5 @@ export type RecommendationInputs = {
   players: Player[];
   articles: NewsArticle[];
   games: Game[];
+  savedArticles: SavedArticle[];
 };

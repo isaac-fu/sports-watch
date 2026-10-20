@@ -110,9 +110,9 @@ export function getGameEvents(gameId: string): GameEvent[] {
 }
 
 export const mockPlayerStats: PlayerStat[] = [
-  { playerId: "stephen-curry", playerName: "Stephen Curry", teamId: "gsw", teamName: "Golden State Warriors", gamesPlayed: 53, pointsPerGame: 27.8, reboundsPerGame: 4.5, assistsPerGame: 6.2, fieldGoalPercentage: 45.8, threePointPercentage: 40.7 },
-  { playerId: "jalen-brunson", playerName: "Jalen Brunson", teamId: "nyk", teamName: "New York Knicks", gamesPlayed: 55, pointsPerGame: 28.4, reboundsPerGame: 3.1, assistsPerGame: 7.5, fieldGoalPercentage: 48.1, threePointPercentage: 38.9 },
-  { playerId: "shai-gilgeous-alexander", playerName: "Shai Gilgeous-Alexander", teamId: "okc", teamName: "Oklahoma City Thunder", gamesPlayed: 56, pointsPerGame: 32.1, reboundsPerGame: 5.7, assistsPerGame: 6.4, fieldGoalPercentage: 51.9, threePointPercentage: 36.8 },
+  { playerId: "stephen-curry", playerName: "Stephen Curry", teamId: "gsw", teamName: "Golden State Warriors", gamesPlayed: 53, pointsPerGame: 27.8, reboundsPerGame: 4.5, assistsPerGame: 6.2, stealsPerGame: 1.1, fieldGoalPercentage: 45.8, threePointPercentage: 40.7 },
+  { playerId: "jalen-brunson", playerName: "Jalen Brunson", teamId: "nyk", teamName: "New York Knicks", gamesPlayed: 55, pointsPerGame: 28.4, reboundsPerGame: 3.1, assistsPerGame: 7.5, stealsPerGame: 0.9, fieldGoalPercentage: 48.1, threePointPercentage: 38.9 },
+  { playerId: "shai-gilgeous-alexander", playerName: "Shai Gilgeous-Alexander", teamId: "okc", teamName: "Oklahoma City Thunder", gamesPlayed: 56, pointsPerGame: 32.1, reboundsPerGame: 5.7, assistsPerGame: 6.4, stealsPerGame: 1.8, fieldGoalPercentage: 51.9, threePointPercentage: 36.8 },
 ];
 
 export const mockTeamStats: TeamStat[] = mockTeams.slice(0, 3).map((team, index) => ({ teamId: team.id, teamName: team.name, wins: [31, 38, 43][index], losses: [27, 21, 16][index], conferenceRank: [6, 3, 1][index], pointsPerGame: [114.8, 117.2, 119.1][index], pointsAllowedPerGame: [113.9, 111.2, 108.7][index] }));

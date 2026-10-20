@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { formatPacificTipTime } from "@/lib/game-time";
+import { createContext, useContext, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { dateKeyInTimeZone, formatLongDateInTimeZone, formatTipTime, greetingForTimeZone, timeZoneDisplayName } from "@/lib/game-time";
 import { searchPlayers, searchTeams } from "@/lib/entity-search";
 import { feedFreshnessLabel, feedFreshnessThresholdsMs } from "@/lib/feed-freshness";
 
@@ -53,7 +53,7 @@ type Player = {
   imageUrl?: string;
 };
 
-type Account = { id: string; displayName: string; email: string; timezone: string; createdAt: string };
+type Account = { id: string; displayName: string; email: string; timezone: string; createdAt: string; emailVerified: boolean };
 type AlertPreferences = { gameStarting: boolean; closeGame: boolean; finalScore: boolean; standoutPerformance: boolean; injuryUpdate: boolean; leadChange: boolean; milestone: boolean };
 type Preferences = { followedTeamIds: string[]; followedPlayerIds: string[]; alerts: AlertPreferences };
 type TeamRecommendation = { team: Team; score: number; reason: string };
@@ -62,6 +62,7 @@ type GameRecommendation = { game: ApiGame; score: number; reason: string };
 type DiscoveryRecommendations = { teams: TeamRecommendation[]; players: PlayerRecommendation[]; games: GameRecommendation[] };
 type CatchUpMoment = { id: string; title: string; detail: string; reason: string; importanceScore: number; source: "game-event" | "news"; context?: string };
 type CatchUpBrief = { title: string; lede: string; readTimeMinutes: number; generatedAt: string; game: ApiGame | null; moments: CatchUpMoment[]; source: "play-by-play" | "news" };
+type CatchUpCitationData = { url: string; title: string; startIndex: number; endIndex: number };
 type DeliveredAlert = { id: string; candidateId: string; type: keyof AlertPreferences; title: string; body: string; priority: number; occurredAt: string; read: boolean; deliveredAt: string; readAt: string | null };
 const alertLabels: Record<keyof AlertPreferences, string> = { gameStarting: "Game starting", closeGame: "Close game", finalScore: "Final score", standoutPerformance: "Standout performance", injuryUpdate: "Injury update", leadChange: "Late lead change", milestone: "Player milestone" };
 const alertIcons: Record<keyof AlertPreferences, string> = { gameStarting: "◷", closeGame: "⌁", finalScore: "✓", standoutPerformance: "✦", injuryUpdate: "!", leadChange: "↔", milestone: "★" };
@@ -161,6 +162,7 @@ type PlayerProfileData = {
   player: Player;
   bio: { height?: string; weight?: string; jerseyNumber?: string; college?: string; country?: string; draftYear?: number; draftRound?: number; draftNumber?: number };
   currentSeason: PlayerSeasonStat | null;
+  currentSeasonRankings?: { pointsPerGame: number; reboundsPerGame: number; assistsPerGame: number; stealsPerGame: number; fieldGoalPercentage: number; threePointPercentage: number; playerCount: number } | null;
   career: PlayerCareerStat | null;
   seasons: PlayerSeasonStat[];
   lastTenGames: PlayerGameLog[];
@@ -171,6 +173,10 @@ type TeamProfileData = {
   team: Team;
   seasonLabel: string;
   stats: { teamId: string; teamName: string; wins: number; losses: number; conferenceRank: number; pointsPerGame: number; pointsAllowedPerGame: number };
+  rankings: { record: number; conference: number; pointsPerGame: number; pointsAllowedPerGame: number; pointDifferential: number; leagueSize: number };
+  standings: Array<{ teamId: string; teamName: string; teamShort: string; color: string; imageUrl?: string; conference: "Eastern" | "Western"; conferenceRank: number; wins: number; losses: number; winPercentage: number; pointDifferential: number }>;
+  standingsSeasonLabel: string;
+  standingsUsesPreviousSeason: boolean;
   roster: Player[];
   recentGames: ApiGame[];
   upcomingGames: ApiGame[];
@@ -182,6 +188,7 @@ type TeamProfileData = {
 type ScheduleView = "day" | "week" | "month";
 type ThemeMode = "dark" | "light";
 type SettingsSection = "account" | "preferences" | "appearance";
+const TimeZoneContext = createContext("America/Los_Angeles");
 
 const defaultTeams: Team[] = [
   { id: "gsw", name: "Golden State Warriors", short: "GSW", color: "#f3b942", record: "31–27", imageUrl: "https://a.espncdn.com/i/teamlogos/nba/500/gs.png" },
@@ -197,6 +204,16 @@ const defaultPlayers: Player[] = [
 
 const teamImageCodes: Record<string, string> = { gsw: "gs", nyk: "ny", okc: "okc", lal: "lal", bos: "bos", phx: "phx", den: "den", dal: "dal", mia: "mia", sac: "sac" };
 const teamImageUrl = (teamId: string) => `https://a.espncdn.com/i/teamlogos/nba/500/${teamImageCodes[teamId] ?? teamId}.png`;
+const commonTimeZones = [
+  ["America/Los_Angeles", "Pacific Time"],
+  ["America/Denver", "Mountain Time"],
+  ["America/Chicago", "Central Time"],
+  ["America/New_York", "Eastern Time"],
+  ["America/Phoenix", "Arizona Time"],
+  ["America/Anchorage", "Alaska Time"],
+  ["Pacific/Honolulu", "Hawaii Time"],
+  ["UTC", "UTC"],
+] as const;
 
 const toDateKey = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 const addDays = (date: Date, amount: number) => { const next = new Date(date); next.setDate(next.getDate() + amount); return next; };
@@ -250,7 +267,7 @@ const buildSchedule = (): Game[] => {
   });
 };
 
-const mapApiGame = (game: ApiGame): Game => ({ id: game.id, date: game.date, time: game.time, startsAt: game.startsAt, network: game.network, venue: game.venue, status: game.status, homeScore: game.homeScore, awayScore: game.awayScore, period: game.period, clock: game.clock, updatedAt: game.updatedAt, homeId: game.home.id, home: game.home.name, homeShort: game.home.short, homeColor: game.home.color, homeImageUrl: game.home.imageUrl, awayId: game.away.id, away: game.away.name, awayShort: game.away.short, awayColor: game.away.color, awayImageUrl: game.away.imageUrl });
+const mapApiGame = (game: ApiGame, timeZone = "America/Los_Angeles"): Game => ({ id: game.id, date: dateKeyInTimeZone(game.startsAt, game.date, timeZone), time: game.time, startsAt: game.startsAt, network: game.network, venue: game.venue, status: game.status, homeScore: game.homeScore, awayScore: game.awayScore, period: game.period, clock: game.clock, updatedAt: game.updatedAt, homeId: game.home.id, home: game.home.name, homeShort: game.home.short, homeColor: game.home.color, homeImageUrl: game.home.imageUrl, awayId: game.away.id, away: game.away.name, awayShort: game.away.short, awayColor: game.away.color, awayImageUrl: game.away.imageUrl });
 
 function TeamMark({ short, color, imageUrl }: { short: string; color: string; imageUrl?: string }) {
   const [imageFailed, setImageFailed] = useState(false);
@@ -267,8 +284,9 @@ function EntitySearch({ value, onChange, label, placeholder }: { value: string; 
 }
 
 function GameRow({ game }: { game: Game }) {
+  const timeZone = useContext(TimeZoneContext);
   const gameDate = new Date(`${game.date}T12:00:00`);
-  return <article className="schedule-game-row"><div className="schedule-game-date"><strong>{gameDate.toLocaleDateString("en-US", { weekday: "short" }).toUpperCase()}</strong><span>{gameDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span></div><div className="schedule-matchup"><div><TeamMark short={game.awayShort} color={game.awayColor} imageUrl={game.awayImageUrl} /><span>{game.away}</span></div><b>at</b><div><TeamMark short={game.homeShort} color={game.homeColor} imageUrl={game.homeImageUrl} /><span>{game.home}</span></div></div><div className="schedule-game-time"><strong>{formatPacificTipTime(game.startsAt, game.time)}</strong><span>{game.network}</span></div></article>;
+  return <article className="schedule-game-row"><div className="schedule-game-date"><strong>{gameDate.toLocaleDateString("en-US", { weekday: "short" }).toUpperCase()}</strong><span>{gameDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span></div><div className="schedule-matchup"><div><TeamMark short={game.awayShort} color={game.awayColor} imageUrl={game.awayImageUrl} /><span>{game.away}</span></div><b>at</b><div><TeamMark short={game.homeShort} color={game.homeColor} imageUrl={game.homeImageUrl} /><span>{game.home}</span></div></div><div className="schedule-game-time"><strong>{formatTipTime(game.startsAt, game.time, timeZone, game.date)}</strong><span>{game.network}</span></div></article>;
 }
 
 function LiveGameCard({ game, onOpen }: { game: Game; onOpen?: () => void }) {
@@ -277,11 +295,12 @@ function LiveGameCard({ game, onOpen }: { game: Game; onOpen?: () => void }) {
 }
 
 function GameCenterPanel({ center, loading, refreshing, catchUpLoading, error, onClose, onRetry, onCatchUp }: { center: GameCenterData | null; loading: boolean; refreshing: boolean; catchUpLoading: boolean; error: string; onClose: () => void; onRetry: () => void; onCatchUp: () => void }) {
+  const timeZone = useContext(TimeZoneContext);
   if (loading && !center) return <section className="game-center-panel game-center-loading"><span className="live-loader" /><strong>Opening game center…</strong><small>Loading the latest score and play-by-play.</small></section>;
   if (!center) return <section className="game-center-panel game-center-loading"><strong>Could not open this game.</strong><small>{error || "The game center is temporarily unavailable."}</small><button onClick={onRetry}>Try again</button></section>;
 
   const { game } = center;
-  const statusLabel = game.status === "final" ? "Final" : game.status === "scheduled" ? `${game.date} · ${formatPacificTipTime(game.startsAt, game.time)}` : `${game.period && game.period > 4 ? `OT${game.period - 4}` : `Q${game.period ?? "—"}`} · ${game.clock ?? "Live"}`;
+  const statusLabel = game.status === "final" ? "Final" : game.status === "scheduled" ? `${dateKeyInTimeZone(game.startsAt, game.date, timeZone)} · ${formatTipTime(game.startsAt, game.time, timeZone, game.date)}` : `${game.period && game.period > 4 ? `OT${game.period - 4}` : `Q${game.period ?? "—"}`} · ${game.clock ?? "Live"}`;
   const latestEvents = [...center.events].sort((a, b) => b.sequence - a.sequence);
   const emptyMessage = center.playByPlayStatus === "pending" ? "Play-by-play will begin at tip-off." : "Play-by-play is not available for this game yet.";
   const sourceLabel = center.source === "mock-repository" ? "Demo game data" : "BALLDONTLIE live data";
@@ -320,10 +339,14 @@ function SavedStoriesView({ articles, savingArticleId, error, onOpen, onRemove }
 }
 
 function TeamProfileView({ profile, loading, error, isFollowed, onBack, onRetry, onToggleFollow, onOpenPlayer, onOpenGame, onOpenArticle }: { profile: TeamProfileData | null; loading: boolean; error: string; isFollowed: boolean; onBack: () => void; onRetry: () => void; onToggleFollow: () => void; onOpenPlayer: (playerId: string) => void; onOpenGame: (gameId: string) => void; onOpenArticle: (articleId: string) => void }) {
+  const timeZone = useContext(TimeZoneContext);
   if (loading && !profile) return <><div className="page-heading team-profile-heading"><button className="profile-back" onClick={onBack}>← My teams</button><p className="overline">TEAM PROFILE</p><h1>Loading team…</h1></div><section className="player-profile-state"><span className="live-loader" /><strong>Loading team overview</strong><small>Collecting season stats, roster, games, and news.</small></section></>;
   if (!profile) return <><div className="page-heading team-profile-heading"><button className="profile-back" onClick={onBack}>← My teams</button><p className="overline">TEAM PROFILE</p><h1>Team unavailable</h1></div><section className="player-profile-state"><strong>Could not load this team.</strong><small>{error || "Team information is temporarily unavailable."}</small><button onClick={onRetry}>Try again</button></section></>;
 
   const pointDifferential = Number((profile.stats.pointsPerGame - profile.stats.pointsAllowedPerGame).toFixed(1));
+  const rankLabel = (rank: number, scope = "NBA") => rank > 0 ? `#${rank} ${scope}` : "Rank unavailable";
+  const conferenceName = profile.standings.find((standing) => standing.teamId === profile.team.id)?.conference ?? "Conference";
+  const standingsByConference = (["Eastern", "Western"] as const).map((conference) => ({ conference, rows: profile.standings.filter((standing) => standing.conference === conference) }));
   const sourceLabel = profile.source === "mock-repository" ? "Demo team data" : profile.source;
   const resultFor = (game: ApiGame) => {
     const isHome = game.home.id === profile.team.id;
@@ -334,12 +357,14 @@ function TeamProfileView({ profile, loading, error, isFollowed, onBack, onRetry,
 
   return <div className="team-profile-page"><div className="team-profile-heading"><button className="profile-back" onClick={onBack}>← My teams</button></div>
     <section className="team-profile-hero"><TeamMark short={profile.team.short} color={profile.team.color} imageUrl={profile.team.imageUrl} /><div><p className="overline">{profile.seasonLabel} SEASON</p><h1>{profile.team.name}</h1><p>{profile.stats.wins}–{profile.stats.losses} · #{profile.stats.conferenceRank} in conference</p></div><button className={isFollowed ? "profile-follow following" : "profile-follow"} onClick={onToggleFollow}>{isFollowed ? "✓ Following" : "+ Follow team"}</button></section>
-    <section className="team-metric-strip"><div><strong>{profile.stats.wins}–{profile.stats.losses}</strong><span>Record</span></div><div><strong>#{profile.stats.conferenceRank}</strong><span>Conference</span></div><div><strong>{profile.stats.pointsPerGame}</strong><span>Points per game</span></div><div><strong>{profile.stats.pointsAllowedPerGame}</strong><span>Points allowed</span></div><div><strong className={pointDifferential >= 0 ? "positive" : "negative"}>{pointDifferential > 0 ? "+" : ""}{pointDifferential}</strong><span>Point differential</span></div></section>
+    <section className="team-metric-strip"><div><strong>{profile.stats.wins}–{profile.stats.losses}</strong><span>Record</span><small>{rankLabel(profile.rankings.record)}</small></div><div><strong>#{profile.stats.conferenceRank}</strong><span>Conference</span><small>{rankLabel(profile.rankings.conference, conferenceName)}</small></div><div><strong>{profile.stats.pointsPerGame}</strong><span>Points per game</span><small>{rankLabel(profile.rankings.pointsPerGame)}</small></div><div><strong>{profile.stats.pointsAllowedPerGame}</strong><span>Points allowed</span><small>{rankLabel(profile.rankings.pointsAllowedPerGame)}</small></div><div><strong className={pointDifferential >= 0 ? "positive" : "negative"}>{pointDifferential > 0 ? "+" : ""}{pointDifferential}</strong><span>Point differential</span><small>{rankLabel(profile.rankings.pointDifferential)}</small></div></section>
+
+    <section className="team-profile-panel team-standings-panel"><div className="section-heading"><div><p className="overline">LEAGUE TABLE</p><h2>{profile.standingsSeasonLabel} standings</h2><p className="panel-copy">{profile.standingsUsesPreviousSeason ? "The current regular season has not started, so last season is shown." : "Current regular-season conference standings."}</p></div><span className="count-badge">{profile.standingsUsesPreviousSeason ? "Previous season" : "Current season"}</span></div><div className="standings-conferences">{standingsByConference.map(({ conference, rows }) => <div className="conference-standings" key={conference}><h3>{conference} Conference</h3><div className="standings-header"><span>Rank</span><span>Team</span><span>W</span><span>L</span><span>Diff</span></div><div className="standings-scroll">{rows.map((standing) => <div className={standing.teamId === profile.team.id ? "standings-row selected" : "standings-row"} key={standing.teamId}><b>{standing.conferenceRank}</b><span><TeamMark short={standing.teamShort} color={standing.color} imageUrl={standing.imageUrl} /><strong>{standing.teamName}</strong></span><em>{standing.wins}</em><em>{standing.losses}</em><em className={standing.pointDifferential >= 0 ? "positive" : "negative"}>{standing.pointDifferential > 0 ? "+" : ""}{standing.pointDifferential}</em></div>)}</div></div>)}</div></section>
 
     <div className="team-profile-grid"><section className="team-profile-panel roster-panel"><div className="section-heading"><div><p className="overline">PLAYERS TO KNOW</p><h2>Roster</h2><p className="panel-copy">Open any player for season, career, and last-10 statistics.</p></div><span className="count-badge">{profile.roster.length} players</span></div>{profile.roster.length > 0 ? <div className="team-profile-scroll" tabIndex={0} aria-label={`${profile.team.name} roster`}><div className="team-roster-list">{profile.roster.map((player) => <button key={player.id} onClick={() => onOpenPlayer(player.id)}><PlayerAvatar player={player} className="preference-avatar" /><span><strong>{player.name}</strong><small>{player.position}</small></span><b>→</b></button>)}</div></div> : <div className="profile-empty">No catalog players are available for this roster yet.</div>}</section>
       <section className="team-profile-panel team-news-panel"><div className="section-heading"><div><p className="overline">LATEST COVERAGE</p><h2>Team news</h2></div><span className="count-badge">{profile.articles.length} stories</span></div>{profile.articles.length > 0 ? <div className="team-profile-scroll" tabIndex={0} aria-label={`${profile.team.name} news`}><div className="team-news-list">{profile.articles.map((article) => <button key={article.id} onClick={() => onOpenArticle(article.id)}><small>{article.source} · {formatRelativeTime(article.publishedAt)}</small><strong>{article.title}</strong><p>{article.summary}</p><b>Read story →</b></button>)}</div></div> : <div className="profile-empty">No current stories are available for this team.</div>}</section></div>
 
-    <section className="team-profile-panel team-games-panel"><div className="section-heading"><div><p className="overline">SCHEDULE</p><h2>Upcoming games</h2></div><span className="count-badge">Next {profile.upcomingGames.length}</span></div>{profile.upcomingGames.length > 0 ? <div className="team-game-list">{profile.upcomingGames.map((game) => { const isHome = game.home.id === profile.team.id; const opponent = isHome ? game.away : game.home; return <button key={game.id} onClick={() => onOpenGame(game.id)}><span className="team-game-date">{new Date(`${game.date}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span><TeamMark short={opponent.short} color={opponent.color} imageUrl={opponent.imageUrl} /><span><strong>{isHome ? "vs" : "@"} {opponent.name}</strong><small>{game.status === "live" ? `${game.period ? `Q${game.period}` : "Live"} · ${game.clock ?? "Live"}` : `${formatPacificTipTime(game.startsAt, game.time)} · ${game.network}`}</small></span><b>{game.status === "live" ? "Open live →" : "Game center →"}</b></button>; })}</div> : <div className="profile-empty">No upcoming games are available.</div>}</section>
+    <section className="team-profile-panel team-games-panel"><div className="section-heading"><div><p className="overline">SCHEDULE</p><h2>Upcoming games</h2></div><span className="count-badge">Next {profile.upcomingGames.length}</span></div>{profile.upcomingGames.length > 0 ? <div className="team-game-list">{profile.upcomingGames.map((game) => { const isHome = game.home.id === profile.team.id; const opponent = isHome ? game.away : game.home; return <button key={game.id} onClick={() => onOpenGame(game.id)}><span className="team-game-date">{new Date(`${dateKeyInTimeZone(game.startsAt, game.date, timeZone)}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span><TeamMark short={opponent.short} color={opponent.color} imageUrl={opponent.imageUrl} /><span><strong>{isHome ? "vs" : "@"} {opponent.name}</strong><small>{game.status === "live" ? `${game.period ? `Q${game.period}` : "Live"} · ${game.clock ?? "Live"}` : `${formatTipTime(game.startsAt, game.time, timeZone, game.date)} · ${game.network}`}</small></span><b>{game.status === "live" ? "Open live →" : "Game center →"}</b></button>; })}</div> : <div className="profile-empty">No upcoming games are available.</div>}</section>
 
     <section className="team-profile-panel team-games-panel"><div className="section-heading"><div><p className="overline">RESULTS</p><h2>Recent games</h2></div><span className="count-badge">Last {profile.recentGames.length}</span></div>{profile.recentGames.length > 0 ? <div className="team-game-list">{profile.recentGames.map((game) => { const result = resultFor(game); return <button key={game.id} onClick={() => onOpenGame(game.id)}><span className="team-game-date">{new Date(`${game.date}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span><TeamMark short={result.opponent.short} color={result.opponent.color} imageUrl={result.opponent.imageUrl} /><span><strong>{result.isHome ? "vs" : "@"} {result.opponent.name}</strong><small>{game.network} · Final</small></span><span className={result.result === "W" ? "team-game-result win" : "team-game-result loss"}>{result.result} {result.teamScore}–{result.opponentScore}</span></button>; })}</div> : <div className="profile-empty">No recent final scores are available.</div>}<div className="provider-note"><span className="status-dot" />{sourceLabel} · Updated {formatRelativeTime(profile.updatedAt)}</div></section>
   </div>;
@@ -351,7 +376,15 @@ function PlayerProfileView({ profile, loading, error, isFollowed, onBack, onRetr
 
   const season = profile.currentSeason;
   const career = profile.career;
-  const seasonMetrics = season ? [["PPG", season.pointsPerGame], ["RPG", season.reboundsPerGame], ["APG", season.assistsPerGame], ["SPG", season.stealsPerGame], ["FG%", `${season.fieldGoalPercentage}%`], ["3P%", `${season.threePointPercentage}%`]] : [];
+  const seasonRankings = profile.currentSeasonRankings;
+  const seasonMetrics = season ? [
+    { label: "PPG", value: season.pointsPerGame, rank: seasonRankings?.pointsPerGame },
+    { label: "RPG", value: season.reboundsPerGame, rank: seasonRankings?.reboundsPerGame },
+    { label: "APG", value: season.assistsPerGame, rank: seasonRankings?.assistsPerGame },
+    { label: "SPG", value: season.stealsPerGame, rank: seasonRankings?.stealsPerGame },
+    { label: "FG%", value: `${season.fieldGoalPercentage}%`, rank: seasonRankings?.fieldGoalPercentage },
+    { label: "3P%", value: `${season.threePointPercentage}%`, rank: seasonRankings?.threePointPercentage },
+  ] : [];
   const careerMetrics = career ? [["PPG", career.pointsPerGame], ["RPG", career.reboundsPerGame], ["APG", career.assistsPerGame], ["Games", career.gamesPlayed], ["FG%", `${career.fieldGoalPercentage}%`], ["3P%", `${career.threePointPercentage}%`]] : [];
   const draft = profile.bio.draftYear ? `${profile.bio.draftYear}${profile.bio.draftRound ? ` · Round ${profile.bio.draftRound}` : ""}${profile.bio.draftNumber ? ` · Pick ${profile.bio.draftNumber}` : ""}` : "—";
   const sourceLabel = profile.source === "mock-repository" ? "Demo profile data" : `${profile.source} player data`;
@@ -361,7 +394,7 @@ function PlayerProfileView({ profile, loading, error, isFollowed, onBack, onRetr
     <section className="player-profile-hero"><PlayerAvatar player={profile.player} className="player-profile-avatar" /><div className="player-profile-title"><p className="overline">{profile.player.position}{profile.bio.jerseyNumber ? ` · #${profile.bio.jerseyNumber}` : ""}</p><h1>{profile.player.name}</h1><p>{profile.player.teamName}</p></div><button className={isFollowed ? "profile-follow following" : "profile-follow"} onClick={onToggleFollow}>{isFollowed ? "✓ Following" : "+ Follow player"}</button></section>
     <div className="player-bio-strip"><div><span>Height</span><strong>{profile.bio.height ?? "—"}</strong></div><div><span>Weight</span><strong>{profile.bio.weight ? `${profile.bio.weight} lb` : "—"}</strong></div><div><span>Country</span><strong>{profile.bio.country ?? "—"}</strong></div><div><span>College</span><strong>{profile.bio.college ?? "—"}</strong></div><div><span>Draft</span><strong>{draft}</strong></div></div>
 
-    <div className="player-stat-panels"><section className="player-stat-panel"><div className="section-heading"><div><p className="overline">CURRENT FORM</p><h2>{season?.seasonLabel ?? "Current season"}</h2></div><span className="count-badge">{season ? `${season.gamesPlayed} GP` : "No data"}</span></div>{season ? <div className="player-stat-grid">{seasonMetrics.map(([label, value]) => <div key={label}><strong>{value}</strong><span>{label}</span></div>)}</div> : <div className="profile-empty">Current-season averages are not available yet.</div>}</section>
+    <div className="player-stat-panels"><section className="player-stat-panel"><div className="section-heading"><div><p className="overline">CURRENT FORM</p><h2>{season?.seasonLabel ?? "Current season"}</h2></div><span className="count-badge">{season ? `${season.gamesPlayed} GP` : "No data"}</span></div>{season ? <div className="player-stat-grid">{seasonMetrics.map(({ label, value, rank }) => <div key={label}><strong>{value}</strong><span>{label}</span><small>{rank ? `#${rank} NBA` : "Rank unavailable"}</small></div>)}</div> : <div className="profile-empty">Current-season averages are not available yet.</div>}</section>
       <section className="player-stat-panel"><div className="section-heading"><div><p className="overline">REGULAR SEASON</p><h2>Career averages</h2></div><span className="count-badge">{career ? `${career.seasonsPlayed} seasons` : "No data"}</span></div>{career ? <div className="player-stat-grid">{careerMetrics.map(([label, value]) => <div key={label}><strong>{value}</strong><span>{label}</span></div>)}</div> : <div className="profile-empty">Career averages are not available for this player.</div>}</section></div>
 
     <section className="player-data-panel"><div className="section-heading"><div><p className="overline">RECENT FORM</p><h2>Last 10 games</h2><p className="panel-copy">Latest completed regular-season box scores, including the prior season when needed.</p></div><span className="count-badge">{profile.lastTenGames.length} games</span></div>{profile.lastTenGames.length > 0 ? <div className="player-table-wrap"><table className="player-stats-table"><thead><tr><th>Date</th><th>Opponent</th><th>Result</th><th>MIN</th><th>PTS</th><th>REB</th><th>AST</th><th>STL</th><th>BLK</th><th>TO</th><th>FG</th><th>3PT</th><th>+/-</th></tr></thead><tbody>{profile.lastTenGames.map((game) => <tr key={game.id}><td>{new Date(`${game.date}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</td><td><strong>{game.homeAway === "home" ? "vs" : "@"} {game.opponentShort}</strong></td><td><span className={game.result === "W" ? "game-result win" : "game-result loss"}>{game.result}</span> {game.score}</td><td>{game.minutes}</td><td><strong>{game.points}</strong></td><td>{game.rebounds}</td><td>{game.assists}</td><td>{game.steals}</td><td>{game.blocks}</td><td>{game.turnovers}</td><td>{game.fieldGoals}</td><td>{game.threePointers}</td><td className={game.plusMinus >= 0 ? "positive" : "negative"}>{game.plusMinus > 0 ? "+" : ""}{game.plusMinus}</td></tr>)}</tbody></table></div> : <div className="profile-empty table-empty">No completed regular-season game logs are available.</div>}</section>
@@ -375,19 +408,24 @@ function SettingsView({ account, authenticated, teams, players, preferences, sav
   const [playerQuery, setPlayerQuery] = useState("");
   const [accountSaving, setAccountSaving] = useState(false);
   const [accountStatus, setAccountStatus] = useState("");
+  const [verificationUrl, setVerificationUrl] = useState("");
   const visibleTeams = searchTeams(teams, teamQuery).slice(0, teamQuery.trim() ? 30 : 18);
   const followedPlayerSet = new Set(preferences.followedPlayerIds);
   const visiblePlayers = playerQuery.trim()
     ? searchPlayers(players, playerQuery).slice(0, 30)
     : [...players.filter((player) => followedPlayerSet.has(player.id)), ...players.filter((player) => !followedPlayerSet.has(player.id)).slice(0, 18)];
+  const timeZoneOptions = commonTimeZones.some(([value]) => value === account.timezone)
+    ? commonTimeZones
+    : [[account.timezone, account.timezone], ...commonTimeZones] as ReadonlyArray<readonly [string, string]>;
 
   const saveAccount = async (body: Record<string, string>, successMessage: string, form?: HTMLFormElement) => {
     setAccountSaving(true);
     setAccountStatus("");
     try {
-      const payload = await fetchJson<{ data: Account }>("/api/account", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const payload = await fetchJson<{ data: Account; meta: { verificationRequired: boolean; previewUrl?: string } }>("/api/account", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       onAccountUpdated(payload.data);
-      setAccountStatus(successMessage);
+      setAccountStatus(payload.meta.verificationRequired ? `${successMessage} Check your email to confirm the change.` : successMessage);
+      setVerificationUrl(payload.meta.previewUrl ?? "");
       form?.reset();
     } catch (saveError) {
       setAccountStatus(saveError instanceof Error ? saveError.message : "Could not update your account.");
@@ -398,7 +436,7 @@ function SettingsView({ account, authenticated, teams, players, preferences, sav
     event.preventDefault();
     const form = event.currentTarget;
     const data = new FormData(form);
-    void saveAccount({ displayName: String(data.get("displayName") ?? "") }, "Display name updated.");
+    void saveAccount({ displayName: String(data.get("displayName") ?? ""), timezone: String(data.get("timezone") ?? "") }, "Account details updated.");
   };
   const submitPassword = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -407,15 +445,71 @@ function SettingsView({ account, authenticated, teams, players, preferences, sav
     void saveAccount({ currentPassword: String(data.get("currentPassword") ?? ""), newPassword: String(data.get("newPassword") ?? "") }, "Password updated.", form);
   };
 
-  return <div className="settings-page"><div className="page-heading"><p className="overline">PERSONALIZE SPORTS WATCH</p><h1>Settings</h1><p className="subhead">Manage your account, favorites, and display preferences in one place.</p></div><div className="settings-shell"><nav className="settings-menu" aria-label="Settings sections">{([['account', 'Account', 'Name, email, and password'], ['preferences', 'Preferences', 'Teams and players'], ['appearance', 'Appearance', 'Light and dark mode']] as const).map(([key, label, detail]) => <button className={section === key ? "active" : ""} key={key} onClick={() => { onSectionChange(key); setAccountStatus(""); }}><span><strong>{label}</strong><small>{detail}</small></span><b>›</b></button>)}</nav><section className="settings-content">
-    {section === "account" ? <><div className="settings-section-heading"><p className="overline">ACCOUNT SETTINGS</p><h2>Your account</h2><p>Update the details used across Sports Watch.</p></div>{authenticated ? <div className="account-settings-forms"><form className="settings-form" onSubmit={submitProfile}><h3>Account details</h3><label>Display name<input name="displayName" defaultValue={account.displayName} minLength={2} maxLength={50} required /></label><label>Email<input value={account.email} disabled /></label><button disabled={accountSaving}>Save profile</button></form><form className="settings-form password-form" onSubmit={submitPassword}><h3>Change password</h3><label>Current password<input name="currentPassword" type="password" autoComplete="current-password" required /></label><label>New password<input name="newPassword" type="password" autoComplete="new-password" minLength={8} maxLength={128} required /></label><button disabled={accountSaving}>Update password</button></form>{accountStatus && <p className="settings-status" role="status">{accountStatus}</p>}</div> : <div className="settings-signin"><strong>Sign in to edit account details</strong><p>Your preferences can still be explored in demo mode.</p><button onClick={onSignIn}>Sign in</button></div>}</> : section === "preferences" ? <><div className="settings-section-heading"><p className="overline">PREFERENCES</p><h2>Shape your feed</h2><p>Tap a compact bubble to follow or unfollow it. No profile images, just quick choices.</p></div><div className="compact-preference-section"><div className="compact-preference-title"><h3>Teams</h3><span>{preferences.followedTeamIds.length} followed</span></div><EntitySearch value={teamQuery} onChange={setTeamQuery} label="Search teams in settings" placeholder="Search teams" /><div className="preference-bubbles">{visibleTeams.map((team) => { const selected = preferences.followedTeamIds.includes(team.id); return <button className={selected ? "preference-bubble selected" : "preference-bubble"} key={team.id} disabled={savingPreferences} onClick={() => onToggleTeam(team.id)}><span>{team.name}</span><b>{selected ? "✓" : "+"}</b></button>; })}</div></div><div className="compact-preference-section"><div className="compact-preference-title"><h3>Players</h3><span>{preferences.followedPlayerIds.length} followed</span></div><EntitySearch value={playerQuery} onChange={setPlayerQuery} label="Search players in settings" placeholder="Search players" /><div className="preference-bubbles">{visiblePlayers.map((player) => { const selected = preferences.followedPlayerIds.includes(player.id); return <button className={selected ? "preference-bubble selected" : "preference-bubble"} key={player.id} disabled={savingPreferences} onClick={() => onTogglePlayer(player.id)}><span>{player.name}</span><b>{selected ? "✓" : "+"}</b></button>; })}</div></div></> : <><div className="settings-section-heading"><p className="overline">APPEARANCE</p><h2>Choose a theme</h2><p>Your selection is saved on this device.</p></div><div className="theme-options">{([['dark', 'Dark', 'Deep navy surfaces with bright blue accents'], ['light', 'Light', 'White surfaces with crisp blue accents']] as const).map(([mode, label, detail]) => <button className={theme === mode ? "theme-option selected" : "theme-option"} key={mode} onClick={() => onThemeChange(mode)}><span className={`theme-preview ${mode}`}><i /><i /><i /></span><span><strong>{label}</strong><small>{detail}</small></span><b>{theme === mode ? "✓" : ""}</b></button>)}</div></>}
+  return <div className="settings-page"><div className="page-heading"><p className="overline">PERSONALIZE SPORTS WATCH</p><h1>Settings</h1><p className="subhead">Manage your account, favorites, and display preferences in one place.</p></div><div className="settings-shell"><nav className="settings-menu" aria-label="Settings sections">{([['account', 'Account', 'Name, timezone, and password'], ['preferences', 'Preferences', 'Teams and players'], ['appearance', 'Appearance', 'Light and dark mode']] as const).map(([key, label, detail]) => <button className={section === key ? "active" : ""} key={key} onClick={() => { onSectionChange(key); setAccountStatus(""); }}><span><strong>{label}</strong><small>{detail}</small></span><b>›</b></button>)}</nav><section className="settings-content">
+    {section === "account" ? <><div className="settings-section-heading"><p className="overline">ACCOUNT SETTINGS</p><h2>Your account</h2><p>Update the details used across Sports Watch.</p></div>{authenticated ? <div className="account-settings-forms"><form className="settings-form" onSubmit={submitProfile}><h3>Account details</h3><label>Display name<input name="displayName" defaultValue={account.displayName} minLength={2} maxLength={50} required /></label><label>Email <small className={account.emailVerified ? "email-state verified" : "email-state pending"}>{account.emailVerified ? "Verified" : "Verification pending"}</small><input value={account.email} disabled /></label><label>Game time timezone<select name="timezone" defaultValue={account.timezone}>{timeZoneOptions.map(([value, label]) => <option value={value} key={value}>{label} ({value})</option>)}</select></label><button disabled={accountSaving}>Save profile</button></form><form className="settings-form password-form" onSubmit={submitPassword}><h3>Change password</h3><p className="password-note">Changing your password requires email confirmation before your next sign-in.</p><label>Current password<input name="currentPassword" type="password" autoComplete="current-password" required /></label><label>New password<input name="newPassword" type="password" autoComplete="new-password" minLength={8} maxLength={128} required /></label><button disabled={accountSaving}>Update password</button></form>{accountStatus && <p className="settings-status" role="status">{accountStatus}{verificationUrl && <a href={verificationUrl}> Open local verification link</a>}</p>}</div> : <div className="settings-signin"><strong>Sign in to edit account details</strong><p>Your preferences can still be explored in demo mode.</p><button onClick={onSignIn}>Sign in</button></div>}</> : section === "preferences" ? <><div className="settings-section-heading"><p className="overline">PREFERENCES</p><h2>Shape your feed</h2><p>Tap a compact bubble to follow or unfollow it. No profile images, just quick choices.</p></div><div className="compact-preference-section"><div className="compact-preference-title"><h3>Teams</h3><span>{preferences.followedTeamIds.length} followed</span></div><EntitySearch value={teamQuery} onChange={setTeamQuery} label="Search teams in settings" placeholder="Search teams" /><div className="preference-bubbles">{visibleTeams.map((team) => { const selected = preferences.followedTeamIds.includes(team.id); return <button className={selected ? "preference-bubble selected" : "preference-bubble"} key={team.id} disabled={savingPreferences} onClick={() => onToggleTeam(team.id)}><span>{team.name}</span><b>{selected ? "✓" : "+"}</b></button>; })}</div></div><div className="compact-preference-section"><div className="compact-preference-title"><h3>Players</h3><span>{preferences.followedPlayerIds.length} followed</span></div><EntitySearch value={playerQuery} onChange={setPlayerQuery} label="Search players in settings" placeholder="Search players" /><div className="preference-bubbles">{visiblePlayers.map((player) => { const selected = preferences.followedPlayerIds.includes(player.id); return <button className={selected ? "preference-bubble selected" : "preference-bubble"} key={player.id} disabled={savingPreferences} onClick={() => onTogglePlayer(player.id)}><span>{player.name}</span><b>{selected ? "✓" : "+"}</b></button>; })}</div></div></> : <><div className="settings-section-heading"><p className="overline">APPEARANCE</p><h2>Choose a theme</h2><p>Your selection is saved on this device.</p></div><div className="theme-options">{([['dark', 'Dark', 'Deep navy surfaces with bright blue accents'], ['light', 'Light', 'White surfaces with crisp blue accents']] as const).map(([mode, label, detail]) => <button className={theme === mode ? "theme-option selected" : "theme-option"} key={mode} onClick={() => onThemeChange(mode)}><span className={`theme-preview ${mode}`}><i /><i /><i /></span><span><strong>{label}</strong><small>{detail}</small></span><b>{theme === mode ? "✓" : ""}</b></button>)}</div></>}
   </section></div></div>;
+}
+
+function CatchUpModal({ brief, onClose }: { brief: CatchUpBrief; onClose: () => void }) {
+  const [slide, setSlide] = useState(0);
+  const [question, setQuestion] = useState("");
+  const [answer, setAnswer] = useState("");
+  const [assistantMeta, setAssistantMeta] = useState("");
+  const [citations, setCitations] = useState<CatchUpCitationData[]>([]);
+  const [asking, setAsking] = useState(false);
+  const [assistantError, setAssistantError] = useState("");
+  const moment = brief.moments[slide];
+
+  const moveTo = (next: number) => {
+    setSlide(Math.min(Math.max(next, 0), Math.max(brief.moments.length - 1, 0)));
+    setQuestion("");
+    setAnswer("");
+    setAssistantMeta("");
+    setCitations([]);
+    setAssistantError("");
+  };
+  const ask = async (prompt: string) => {
+    if (!moment || !prompt.trim()) return;
+    setAsking(true);
+    setAssistantError("");
+    try {
+      const payload = await fetchJson<{ data: { answer: string; citations: CatchUpCitationData[]; provider: "groq" | "local"; webSearchUsed: boolean; fallbackReason?: "not-configured" | "provider-unavailable" } }>("/api/catch-up/assist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: prompt, moment }),
+      });
+      setAnswer(payload.data.answer);
+      setCitations(payload.data.citations);
+      setAssistantMeta(payload.data.provider === "groq" ? `Groq AI${payload.data.webSearchUsed ? " · searched current sources" : " · recap context only"}` : payload.data.fallbackReason === "provider-unavailable" ? "Local recap · Groq temporarily unavailable" : "Local recap · add a Groq key for broader answers");
+    } catch (askError) {
+      setAssistantError(askError instanceof Error ? askError.message : "The assistant is unavailable.");
+    } finally { setAsking(false); }
+  };
+
+  const answerParts = (() => {
+    if (citations.length === 0) return answer;
+    const markers = citations.map((citation, index) => ({ ...citation, index })).filter((citation) => citation.endIndex >= 0 && citation.endIndex <= answer.length).sort((left, right) => left.endIndex - right.endIndex);
+    const parts: ReactNode[] = [];
+    let cursor = 0;
+    for (const citation of markers) {
+      if (citation.endIndex < cursor) continue;
+      parts.push(answer.slice(cursor, citation.endIndex));
+      const url = safeExternalUrl(citation.url);
+      if (url) parts.push(<a className="inline-citation" href={url} target="_blank" rel="noreferrer" key={`${url}-${citation.index}`} aria-label={`Source ${citation.index + 1}: ${citation.title}`}>[{citation.index + 1}]</a>);
+      cursor = citation.endIndex;
+    }
+    parts.push(answer.slice(cursor));
+    return parts;
+  })();
+
+  return <div className="modal-backdrop" onClick={onClose}><section className="catch-up-modal" role="dialog" aria-modal="true" aria-labelledby="catch-up-title" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={onClose} aria-label="Close catch-up">×</button><div className="catch-up-header"><p className="overline">YOUR {brief.readTimeMinutes}-MINUTE CATCH-UP</p><h2 id="catch-up-title">{brief.title}</h2><p className="modal-lede">{brief.lede}</p><div className="catch-up-source"><i />{brief.source === "play-by-play" ? "Built from live play-by-play" : "Built from the latest NBA coverage"}</div></div>{brief.game && <div className="recap-stat-row"><div><strong>{brief.game.awayScore ?? "—"}–{brief.game.homeScore ?? "—"}</strong><span>{brief.game.away.short} at {brief.game.home.short}</span></div><div><strong>{brief.game.status === "live" ? (brief.game.period && brief.game.period > 4 ? `OT${brief.game.period - 4}` : `Q${brief.game.period ?? "—"}`) : "FINAL"}</strong><span>{brief.game.status === "live" ? brief.game.clock ?? "Live" : "Game status"}</span></div><div><strong>{brief.moments.length}</strong><span>Key updates</span></div></div>}<div className="catch-up-workspace"><div className="catch-up-reader">{moment ? <article className="catch-up-slide"><div className="slide-progress"><span>STORY {slide + 1} OF {brief.moments.length}</span><div>{brief.moments.map((item, index) => <button key={item.id} className={index === slide ? "active" : ""} onClick={() => moveTo(index)} aria-label={`Open story ${index + 1}`} />)}</div></div><p className="slide-reason">{moment.reason}</p><h3>{moment.title}</h3>{moment.context && <p className="slide-context">{moment.context}</p>}<p className="slide-detail">{moment.detail}</p><div className="slide-importance"><span>Importance</span><b>{moment.importanceScore}/100</b></div></article> : <div className="catch-up-empty">There are no significant updates yet.</div>}<div className="catch-up-navigation"><button onClick={() => moveTo(slide - 1)} disabled={slide === 0}>← Previous</button><button onClick={slide === brief.moments.length - 1 ? onClose : () => moveTo(slide + 1)}>{slide === brief.moments.length - 1 ? "Back to my feed" : "Next story →"}</button></div></div><aside className="catch-up-assistant"><p className="overline">ASK ABOUT THIS STORY</p><h3>Sports Watch assistant</h3><p>Summaries use the recap. Freshness questions search trusted NBA sources and include citations.</p><div className="assistant-prompts">{["Summarize this in one sentence", "Why does this matter?", "What should I watch next?", "Find the latest update"].map((prompt) => <button key={prompt} disabled={!moment || asking} onClick={() => { setQuestion(prompt); void ask(prompt); }}>{prompt}</button>)}</div><form onSubmit={(event) => { event.preventDefault(); void ask(question); }}><label htmlFor="catch-up-question">Your question</label><textarea id="catch-up-question" value={question} onChange={(event) => setQuestion(event.target.value)} maxLength={500} placeholder="Ask about this update…" /><button disabled={!question.trim() || !moment || asking}>{asking ? "Thinking…" : "Ask assistant"}</button></form>{assistantError && <p className="assistant-error" role="alert">{assistantError}</p>}{answer && <div className="assistant-answer" aria-live="polite"><strong>Answer</strong><p>{answerParts}</p><small>{assistantMeta}</small>{citations.length > 0 && <div className="assistant-sources"><b>Sources</b><ol>{citations.map((citation, index) => { const url = safeExternalUrl(citation.url); return url ? <li key={url}><a href={url} target="_blank" rel="noreferrer"><span>{index + 1}</span>{citation.title}</a></li> : null; })}</ol></div>}</div>}</aside></div></section></div>;
 }
 
 function AuthModal({ onClose }: { onClose: () => void }) {
   const [mode, setMode] = useState<"login" | "register">("login");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState<{ message: string; previewUrl?: string } | null>(null);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -426,19 +520,22 @@ function AuthModal({ onClose }: { onClose: () => void }) {
       ? { displayName: form.get("displayName"), email: form.get("email"), password: form.get("password"), timezone: Intl.DateTimeFormat().resolvedOptions().timeZone }
       : { email: form.get("email"), password: form.get("password") };
     try {
-      await fetchJson(`/api/auth/${mode === "register" ? "register" : "login"}`, {
+      const payload = await fetchJson<{ meta?: { verificationRequired?: boolean; previewUrl?: string } }>(`/api/auth/${mode === "register" ? "register" : "login"}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      window.location.reload();
+      if (mode === "register" && payload.meta?.verificationRequired) {
+        setSuccess({ message: "Account created. Check your email and open the verification link before signing in.", previewUrl: payload.meta.previewUrl });
+        setSubmitting(false);
+      } else window.location.reload();
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Authentication failed.");
       setSubmitting(false);
     }
   };
 
-  return <div className="modal-backdrop" onClick={onClose}><section className="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-title" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={onClose} aria-label="Close">×</button><div className="auth-brand"><span className="brand-dot" />Sports Watch</div><p className="overline">YOUR NBA, SAVED</p><h2 id="auth-title">{mode === "login" ? "Welcome back" : "Create your account"}</h2><p className="auth-copy">{mode === "login" ? "Sign in to load your teams, players, alerts, and personal feed." : "Save your favorites and get a personal NBA feed on every visit."}</p><form className="auth-form" onSubmit={submit}>{mode === "register" && <label>Display name<input name="displayName" autoComplete="name" minLength={2} maxLength={50} required placeholder="Isaac" /></label>}<label>Email<input name="email" type="email" autoComplete="email" required placeholder="you@example.com" /></label><label>Password<input name="password" type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} minLength={8} maxLength={128} required placeholder="At least 8 characters" /></label>{error && <p className="auth-error" role="alert">{error}</p>}<button className="auth-submit" disabled={submitting}>{submitting ? "Please wait…" : mode === "login" ? "Sign in" : "Create account"}<span>→</span></button></form><button className="auth-switch" onClick={() => { setMode((current) => current === "login" ? "register" : "login"); setError(""); }}>{mode === "login" ? "New to Sports Watch? Create an account" : "Already have an account? Sign in"}</button><p className="auth-demo">You can close this window to keep exploring in shared demo mode.</p></section></div>;
+  return <div className="modal-backdrop" onClick={onClose}><section className="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-title" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={onClose} aria-label="Close">×</button><div className="auth-brand"><span className="brand-dot" />Sports Watch</div><p className="overline">YOUR NBA, SAVED</p><h2 id="auth-title">{success ? "Check your email" : mode === "login" ? "Welcome back" : "Create your account"}</h2>{success ? <div className="auth-success" role="status"><span>✓</span><p>{success.message}</p>{success.previewUrl && <a href={success.previewUrl}>Open local verification link</a>}<button onClick={onClose}>Continue exploring</button></div> : <><p className="auth-copy">{mode === "login" ? "Sign in to load your teams, players, alerts, and personal feed." : "Save your favorites and get a personal NBA feed on every visit."}</p><form className="auth-form" onSubmit={submit}>{mode === "register" && <label>Display name<input name="displayName" autoComplete="name" minLength={2} maxLength={50} required placeholder="Isaac" /></label>}<label>Email<input name="email" type="email" autoComplete="email" required placeholder="you@example.com" /></label><label>Password<input name="password" type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} minLength={8} maxLength={128} required placeholder="At least 8 characters" /></label>{error && <p className="auth-error" role="alert">{error}</p>}<button className="auth-submit" disabled={submitting}>{submitting ? "Please wait…" : mode === "login" ? "Sign in" : "Create account"}<span>→</span></button></form><button className="auth-switch" onClick={() => { setMode((current) => current === "login" ? "register" : "login"); setError(""); }}>{mode === "login" ? "New to Sports Watch? Create an account" : "Already have an account? Sign in"}</button><p className="auth-demo">You can close this window to keep exploring in shared demo mode.</p></>}</section></div>;
 }
 
 function OnboardingModal({ teams, players, recommendedTeamIds, recommendedPlayerIds, initialPreferences }: { teams: Team[]; players: Player[]; recommendedTeamIds: string[]; recommendedPlayerIds: string[]; initialPreferences: Preferences }) {
@@ -486,11 +583,12 @@ export default function Home() {
 
 function SportsWatchApp() {
   const today = useMemo(() => startOfDay(new Date()), []);
+  const [currentTime, setCurrentTime] = useState(() => new Date());
   const fallbackSchedule = useMemo(() => buildSchedule(), []);
   const [schedule, setSchedule] = useState<Game[]>(fallbackSchedule);
   const [teams, setTeams] = useState<Team[]>(defaultTeams);
   const [players, setPlayers] = useState<Player[]>(defaultPlayers);
-  const [account, setAccount] = useState<Account>({ id: "account-demo", displayName: "Alex Morgan", email: "", timezone: "America/Los_Angeles", createdAt: "" });
+  const [account, setAccount] = useState<Account>({ id: "account-demo", displayName: "Alex Morgan", email: "", timezone: "America/Los_Angeles", createdAt: "", emailVerified: true });
   const [theme, setTheme] = useState<ThemeMode>(() => window.localStorage.getItem("sports-watch-theme") === "light" ? "light" : "dark");
   const [authenticated, setAuthenticated] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
@@ -540,12 +638,30 @@ function SportsWatchApp() {
   const [savedArticles, setSavedArticles] = useState<SavedArticleData[]>([]);
   const [savingArticleId, setSavingArticleId] = useState<string | null>(null);
   const [savedArticlesError, setSavedArticlesError] = useState("");
+  const [verificationNotice, setVerificationNotice] = useState("");
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     document.documentElement.style.colorScheme = theme;
     window.localStorage.setItem("sports-watch-theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const status = url.searchParams.get("verification");
+    if (status === "account") setVerificationNotice("Email verified. Your Sports Watch account is ready.");
+    else if (status === "password") setVerificationNotice("Password change confirmed. Your email is verified again.");
+    else if (status === "invalid") setVerificationNotice("That verification link is invalid or has expired.");
+    if (status) {
+      url.searchParams.delete("verification");
+      window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+    }
+  }, []);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setCurrentTime(new Date()), 60_000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -561,8 +677,9 @@ function SportsWatchApp() {
       fetchJson<{ data: SavedArticleData[] }>("/api/saved/articles").catch(() => ({ data: [] })),
     ]).then(([gamesPayload, accountPayload, preferencesPayload, feedPayload, catalogPayload, discoveryPayload, catchUpPayload, alertsPayload, savedPayload]) => {
       if (!mounted) return;
-      setSchedule(gamesPayload.data.map(mapApiGame));
-      setAccount(accountPayload.data);
+      const loadedAccount = accountPayload.meta.authenticated ? accountPayload.data : { ...accountPayload.data, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || accountPayload.data.timezone };
+      setSchedule(gamesPayload.data.map((game) => mapApiGame(game, loadedAccount.timezone)));
+      setAccount(loadedAccount);
       setAuthenticated(accountPayload.meta.authenticated);
       setOnboardingOpen(accountPayload.meta.authenticated && !accountPayload.meta.onboardingCompleted);
       setPreferences(preferencesPayload.data);
@@ -614,7 +731,7 @@ function SportsWatchApp() {
         if (!mounted) return;
         setGameCenter(payload.data);
         setGameCenterError("");
-        const updatedGame = mapApiGame(payload.data.game);
+        const updatedGame = mapApiGame(payload.data.game, account.timezone);
         setSchedule((current) => current.map((game) => game.id === updatedGame.id ? updatedGame : game));
       } catch (loadError) {
         if (mounted) setGameCenterError(loadError instanceof Error ? loadError.message : "Could not refresh the game center.");
@@ -629,7 +746,7 @@ function SportsWatchApp() {
     void refreshGameCenter();
     const interval = window.setInterval(() => void refreshGameCenter(true), 15_000);
     return () => { mounted = false; window.clearInterval(interval); };
-  }, [selectedGameId, gameCenterRefreshKey]);
+  }, [selectedGameId, gameCenterRefreshKey, account.timezone]);
 
   const persistPreferences = async (next: Preferences) => {
     const previous = preferences;
@@ -852,10 +969,9 @@ function SportsWatchApp() {
     }
   };
 
-  return <main className="app-shell">
+  return <TimeZoneContext.Provider value={account.timezone}><main className="app-shell">
     <aside className="sidebar">
       <div className="brand"><span className="brand-dot" />Sports Watch</div>
-      <div className="sidebar-section-label">Workspace</div>
       <nav className="main-nav" aria-label="Main navigation">{["Home", "Schedule", "Live games", "My teams", "My players", "Saved"].map((item) => <button className={activeNav === item || (item === "My teams" && activeNav === "Team profile") || (item === "My players" && activeNav === "Player profile") || (item === "Saved" && activeNav === "Article" && articleBackNav === "Saved") ? "nav-item active" : "nav-item"} onClick={() => setActiveNav(item)} key={item}><span className="nav-icon">{item === "Home" ? "⌂" : item === "Schedule" ? "▦" : item === "Live games" ? "◉" : item === "My teams" ? "◈" : item === "My players" ? "♙" : "◇"}</span>{item}{item === "Live games" && liveGames.length > 0 && <span className="live-pill">{liveGames.length}</span>}{item === "Saved" && savedArticles.length > 0 && <span className="saved-pill">{savedArticles.length}</span>}</button>)}</nav>
       <div className="sidebar-section-label following-label">Following</div>
       <div className="following-list">{followedTeams.slice(0, 2).map((team) => <button className="following-row following-team" key={team.id} onClick={() => void openTeamProfile(team.id)}><TeamMark short={team.short} color={team.color} imageUrl={team.imageUrl} /><span>{team.name.replace(/^(Golden State|New York|Oklahoma City) /, "")}</span></button>)}{followedPlayers.slice(0, 2).map((player) => <button className="following-row following-player" key={player.id} onClick={() => void openPlayerProfile(player.id)}><PlayerAvatar player={player} className="small-avatar" /><span>{player.name}</span></button>)}{followedTeams.length === 0 && followedPlayers.length === 0 && <div className="following-empty">Nothing followed yet</div>}<button className="add-following" onClick={() => { setSettingsSection("preferences"); setActiveNav("Settings"); }}>＋ Manage following</button></div>
@@ -863,20 +979,20 @@ function SportsWatchApp() {
     </aside>
 
     <section className="content-area">
-      <header className="topbar"><div className="mobile-brand"><span className="brand-dot" />Sports Watch</div><div className="date-label">{today.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}</div><div className="top-actions">{!authenticated && <button className="top-auth-button" onClick={() => setAuthOpen(true)}>Sign in</button>}<button className="icon-button" aria-label="Search">⌕</button><div className="notification-menu"><button className="notification-button" aria-label={`${unreadCount} unread notifications`} aria-expanded={notificationsOpen} onClick={() => setNotificationsOpen((open) => !open)}>♧{unreadCount > 0 && <span />}</button>{notificationsOpen && <section className="notification-panel" aria-label="Notifications"><div className="notification-header"><div><p className="overline">ALERT INBOX</p><h2>Notifications</h2></div>{unreadCount > 0 && <button onClick={() => void markAllNotificationsRead()}>Mark all read</button>}</div>{notifications.length > 0 ? <div className="notification-list">{notifications.map((notification) => <article className={notification.read ? "notification-row read" : "notification-row"} key={notification.id}><span className="notification-kind">{alertIcons[notification.type]}</span><div><p>{alertLabels[notification.type]} · {formatRelativeTime(notification.deliveredAt)}</p><strong>{notification.title}</strong><span>{notification.body}</span></div></article>)}</div> : <div className="notification-empty">No alerts yet. The worker will add important updates here.</div>}</section>}</div></div></header>
+      <header className="topbar"><div className="mobile-brand"><span className="brand-dot" />Sports Watch</div><div className="date-label">{formatLongDateInTimeZone(account.timezone, currentTime)}</div><div className="top-actions">{!authenticated && <button className="top-auth-button" onClick={() => setAuthOpen(true)}>Sign in</button>}<button className="icon-button" aria-label="Search">⌕</button><div className="notification-menu"><button className="notification-button" aria-label={`${unreadCount} unread notifications`} aria-expanded={notificationsOpen} onClick={() => setNotificationsOpen((open) => !open)}>♧{unreadCount > 0 && <span />}</button>{notificationsOpen && <section className="notification-panel" aria-label="Notifications"><div className="notification-header"><div><p className="overline">ALERT INBOX</p><h2>Notifications</h2></div>{unreadCount > 0 && <button onClick={() => void markAllNotificationsRead()}>Mark all read</button>}</div>{notifications.length > 0 ? <div className="notification-list">{notifications.map((notification) => <article className={notification.read ? "notification-row read" : "notification-row"} key={notification.id}><span className="notification-kind">{alertIcons[notification.type]}</span><div><p>{alertLabels[notification.type]} · {formatRelativeTime(notification.deliveredAt)}</p><strong>{notification.title}</strong><span>{notification.body}</span></div></article>)}</div> : <div className="notification-empty">No alerts yet. The worker will add important updates here.</div>}</section>}</div></div></header>{verificationNotice && <div className={verificationNotice.startsWith("That") ? "verification-banner error" : "verification-banner"} role="status"><span>{verificationNotice}</span><button onClick={() => setVerificationNotice("")} aria-label="Dismiss verification message">×</button></div>}
       <nav className="mobile-nav" aria-label="Mobile navigation">{[["Home", "⌂"], ["Schedule", "▦"], ["Live games", "◉"], ["My teams", "◈"], ["My players", "♙"], ["Saved", "◇"], ["Settings", "⚙"]].map(([item, icon]) => <button className={activeNav === item || (item === "My teams" && activeNav === "Team profile") || (item === "My players" && activeNav === "Player profile") || (item === "Saved" && activeNav === "Article" && articleBackNav === "Saved") ? "active" : ""} onClick={() => { if (item === "Settings") setSettingsSection("account"); setActiveNav(item); }} key={item}><span>{icon}</span>{item === "Live games" ? "Live" : item === "My teams" ? "Teams" : item === "My players" ? "Players" : item}</button>)}</nav>
 
       {activeNav === "Home" ? <>
-        <div className="welcome-row"><div><p className="overline">YOUR NBA, IN FOCUS</p><h1>Good morning, {account.displayName.split(" ")[0]} <span>✦</span></h1><p className="subhead">Here&apos;s what matters across the teams and players you follow.</p></div><button className="catch-up-button" onClick={() => void openCatchUp()} disabled={!catchUpBrief || catchUpLoading}><span>✦</span><span><strong>{catchUpLoading ? "Building recap…" : "Catch me up"}</strong><small>{catchUpBrief?.readTimeMinutes ?? 1} min read</small></span><b>→</b></button></div>
+        <div className="welcome-row"><div><p className="overline">YOUR NBA, IN FOCUS</p><h1>{greetingForTimeZone(account.timezone, currentTime)}, {account.displayName.split(" ")[0]} <span>✦</span></h1><p className="subhead">Here&apos;s what matters across the teams and players you follow.</p></div><button className="catch-up-button" onClick={() => void openCatchUp()} disabled={!catchUpBrief || catchUpLoading}><span>✦</span><span><strong>{catchUpLoading ? "Building recap…" : "Catch me up"}</strong><small>{catchUpBrief?.readTimeMinutes ?? 1} min read</small></span><b>→</b></button></div>
         <div className="dashboard-grid"><div className="feed-column"><div className="section-heading feed-heading"><div><h2>{hasPersonalization ? "Your feed" : "Popular right now"}</h2><p className="feed-subtitle">{hasPersonalization ? "Ranked for your current favorites" : "League-wide stories to get you started"}</p>{feedRefreshStatus && <p className="feed-refresh-status" aria-live="polite">{feedRefreshStatus}</p>}{feedFreshnessStatus && <p className="feed-freshness-status" aria-live="polite">{feedFreshnessStatus}</p>}</div><div className="feed-heading-actions"><span className="feed-count">{feedItems.length} updates</span><button className="feed-refresh-button" disabled={feedRefreshing || personalizationLoading} onClick={() => void refreshFeed()}><span className={feedRefreshing ? "refresh-icon spinning" : "refresh-icon"}>↻</span>{feedRefreshing ? "Checking…" : "Refresh"}</button></div></div><div className="feed-list" tabIndex={0} aria-label={hasPersonalization ? "Your personalized news feed" : "Popular NBA news feed"}>{personalizationLoading ? <div className="feed-state">Building your personalized feed…</div> : feedItems.length === 0 ? <div className="feed-state"><strong>No current NBA stories are available.</strong><span>Fresh updates will appear here after the next data sync.</span><button onClick={() => setActiveNav("My teams")}>Choose favorites</button></div> : feedItems.map((item) => <article className={`feed-card ${item.accent}`} key={item.id}><div className="feed-icon">{item.kind === "performance" ? "◉" : item.kind === "injury" ? "!" : "✦"}</div><div className="feed-content"><div className="feed-card-top"><p className="card-eyebrow">{item.eyebrow} · {formatRelativeTime(item.publishedAt)}</p><span className="relevance-score">{item.relevanceScore}% {hasPersonalization ? "match" : "popular"}</span></div><h3>{item.title}</h3><p className="card-body">{item.body}</p><div className="feed-meta"><span>{item.reason}</span><button onClick={() => void openArticle(item.id, "Home")}>Read story <span>→</span></button></div></div></article>)}</div></div>
           <div className="right-column">
             {featuredLiveGame ? <LiveGameCard game={featuredLiveGame} onOpen={() => openGameCenter(featuredLiveGame.id)} /> : <section className="section-card"><div className="mini-empty">There are no live games right now.</div></section>}
-            <section className="section-card"><div className="section-heading compact"><h2>{hasPersonalization ? "Upcoming for you" : "Popular upcoming games"}</h2><button className="text-button" onClick={() => setActiveNav("Schedule")}>View schedule <span>→</span></button></div>{homeUpcomingGames.length > 0 ? homeUpcomingGames.map((game) => { const gameDate = new Date(`${game.date}T12:00:00`); return <div className="upcoming-game" key={game.id}><div className="upcoming-date"><strong>{gameDate.toLocaleDateString("en-US", { weekday: "short" }).toUpperCase()}</strong><span>{gameDate.toLocaleDateString("en-US", { month: "short", day: "numeric" }).toUpperCase()}</span></div><div className="upcoming-teams"><div><TeamMark short={game.awayShort} color={game.awayColor} imageUrl={game.awayImageUrl} /><span>{game.awayShort}</span></div><b>{formatPacificTipTime(game.startsAt, game.time)}</b><div><TeamMark short={game.homeShort} color={game.homeColor} imageUrl={game.homeImageUrl} /><span>{game.homeShort}</span></div></div><span className="tv-badge">{game.network}</span></div>; }) : <div className="mini-empty">There are no upcoming games available.</div>}</section>
+            <section className="section-card"><div className="section-heading compact"><h2>{hasPersonalization ? "Upcoming for you" : "Popular upcoming games"}</h2><button className="text-button" onClick={() => setActiveNav("Schedule")}>View schedule <span>→</span></button></div>{homeUpcomingGames.length > 0 ? homeUpcomingGames.map((game) => { const gameDate = new Date(`${game.date}T12:00:00`); return <div className="upcoming-game" key={game.id}><div className="upcoming-date"><strong>{gameDate.toLocaleDateString("en-US", { weekday: "short" }).toUpperCase()}</strong><span>{gameDate.toLocaleDateString("en-US", { month: "short", day: "numeric" }).toUpperCase()}</span></div><div className="upcoming-teams"><div><TeamMark short={game.awayShort} color={game.awayColor} imageUrl={game.awayImageUrl} /><span>{game.awayShort}</span></div><b>{formatTipTime(game.startsAt, game.time, account.timezone, game.date)}</b><div><TeamMark short={game.homeShort} color={game.homeColor} imageUrl={game.homeImageUrl} /><span>{game.homeShort}</span></div></div><span className="tv-badge">{game.network}</span></div>; }) : <div className="mini-empty">There are no upcoming games available.</div>}</section>
             <section className="section-card alerts-card"><div className="section-heading compact"><div><h2>Your alerts</h2><p>Stay close to what matters.</p></div><span className={preferencesSaving ? "save-state saving" : "save-state"}>{preferencesSaving ? "Saving…" : "Synced"}</span></div>{([['gameStarting', 'Game starting', '30 minutes before tip-off'], ['closeGame', 'Close game', 'Within 5 points in the 4th or a decisive late play'], ['finalScore', 'Final score', 'As soon as the game ends'], ['injuryUpdate', 'Injury updates', 'When availability changes during a game'], ['leadChange', 'Late lead changes', 'When the lead flips in the 4th quarter'], ['milestone', 'Player milestones', 'Notable achievements during live games'], ['standoutPerformance', 'Standout performances', 'For your favorite players']] as Array<[keyof AlertPreferences, string, string]>).map(([key, title, detail]) => <div className="alert-row" key={key}><span className="alert-icon">{alertIcons[key]}</span><span><strong>{title}</strong><small>{detail}</small></span><button aria-label={`Toggle ${title}`} aria-pressed={preferences.alerts[key]} className={preferences.alerts[key] ? "toggle on" : "toggle"} disabled={preferencesSaving} onClick={() => toggleAlert(key)}><i /></button></div>)}</section>
           </div>
         </div>
       </> : activeNav === "Schedule" ? <>
-        <div className="page-heading schedule-heading"><p className="overline">{hasPersonalization ? "YOUR UPCOMING GAMES" : "POPULAR UPCOMING GAMES"}</p><h1>Schedule</h1><p className="subhead">{hasPersonalization ? "Plan around the games you care about, from now through the end of the playoffs." : "Explore high-visibility NBA games while you choose teams and players to follow."} All tip times are shown in PST.</p></div>
+        <div className="page-heading schedule-heading"><p className="overline">{hasPersonalization ? "YOUR UPCOMING GAMES" : "POPULAR UPCOMING GAMES"}</p><h1>Schedule</h1><p className="subhead">{hasPersonalization ? "Plan around the games you care about, from now through the end of the playoffs." : "Explore high-visibility NBA games while you choose teams and players to follow."} Tip times are shown in {timeZoneDisplayName(account.timezone, currentTime)}.</p></div>
         <div className="schedule-layout"><section className="calendar-panel"><div className="schedule-panel-header"><div><p className="overline">CALENDAR</p><h2>{formatMonth(selectedMonth)}</h2></div><div className="month-controls"><button onClick={() => moveMonth(-1)} disabled={selectedMonthIndex === 0} aria-label="Previous month">←</button><button onClick={() => moveMonth(1)} disabled={selectedMonthIndex === calendarMonths.length - 1} aria-label="Next month">→</button></div></div><div className="calendar-filter-row"><label htmlFor="schedule-team">Show games for</label><select id="schedule-team" value={scheduleTeam} onChange={(event) => setScheduleTeam(event.target.value)}>{teamOptions.map((team) => <option key={team}>{team}</option>)}</select><span className="calendar-range">{formatMonth(calendarMonths[0])} — {formatMonth(calendarMonths[calendarMonths.length - 1])}</span></div><div className="calendar-weekdays">{["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day) => <span key={day}>{day}</span>)}</div><div className="calendar-grid">{calendarCells.map((day, index) => { const dateKey = day ? toDateKey(new Date(selectedMonth.getFullYear(), selectedMonth.getMonth(), day)) : `blank-${index}`; const dayGames = day ? gamesForDate(dateKey) : []; const isSelected = dateKey === selectedDate; const isToday = dateKey === toDateKey(today); return <button className={day ? `calendar-day ${isSelected ? "selected" : ""} ${isToday ? "today" : ""}` : "calendar-day blank"} key={dateKey} disabled={!day} onClick={() => { if (day) { setSelectedDate(dateKey); setScheduleView("day"); } }}>{day && <><span className="calendar-day-number">{day}</span>{dayGames.length > 0 && <span className="calendar-game-dot" title={`${dayGames.length} game${dayGames.length === 1 ? "" : "s"}`}><i />{dayGames.length}</span>}{dayGames.slice(0, 2).map((game) => <span className="calendar-game-label" key={game.id}>{game.homeShort} <b>·</b> {game.awayShort}</span>)}</>}</button>; })}</div><div className="selected-date-summary"><div><p className="overline">SELECTED DAY</p><h3>{formatShortDate(selectedDay)}</h3></div><span>{gamesForDate(selectedDate).length} game{gamesForDate(selectedDate).length === 1 ? "" : "s"}</span></div>{gamesForDate(selectedDate).length > 0 ? <div className="selected-day-games">{gamesForDate(selectedDate).map((game) => <GameRow game={game} key={game.id} />)}</div> : <div className="empty-schedule compact-empty"><span>◌</span><strong>No games available</strong><small>Try another day or team filter.</small></div>}</section><aside className="soonest-panel"><div className="section-heading compact"><div><p className="overline">QUICK VIEW</p><h2>Soonest games</h2></div><span className="schedule-count">{filteredSchedule.length} total</span></div><div className="schedule-view-tabs" role="tablist" aria-label="Soonest games range">{(["day", "week", "month"] as ScheduleView[]).map((view) => <button className={scheduleView === view ? "active" : ""} key={view} onClick={() => setScheduleView(view)}>{view}</button>)}</div><p className="soonest-description">Showing games for {scheduleView === "day" ? formatShortDate(selectedDay) : scheduleView === "week" ? `the week of ${formatShortDate(range.start)}` : formatMonth(selectedMonth)}.</p>{soonestGames.length > 0 ? <div className="soonest-list">{soonestGames.map((game) => <GameRow game={game} key={game.id} />)}</div> : <div className="empty-schedule"><span>◌</span><strong>No games available</strong><small>There are no upcoming games in this category.</small></div>}<button className="schedule-reset" onClick={() => { setScheduleTeam("All teams"); setScheduleView("month"); setSelectedMonthIndex(0); setSelectedDate(toDateKey(calendarMonths[0])); }}>Reset schedule view <span>↺</span></button></aside></div>
       </> : activeNav === "Article" ? <ArticleDetailView article={articleDetail} loading={articleLoading} error={articleError} saved={Boolean(selectedArticleId && savedArticles.some((article) => article.id === selectedArticleId))} saving={savingArticleId === selectedArticleId} backLabel={articleBackNav === "Saved" ? "Saved stories" : articleBackNav === "Team profile" ? "Team profile" : "Home"} teams={teams} players={players} onBack={() => setActiveNav(articleBackNav)} onRetry={() => { if (selectedArticleId) void openArticle(selectedArticleId, articleBackNav); }} onToggleSave={() => void toggleArticleSave()} onOpenTeam={(teamId) => void openTeamProfile(teamId)} onOpenPlayer={(playerId) => void openPlayerProfile(playerId)} /> : activeNav === "Saved" ? <SavedStoriesView articles={savedArticles} savingArticleId={savingArticleId} error={savedArticlesError} onOpen={(articleId) => void openArticle(articleId, "Saved")} onRemove={(articleId) => void removeSavedStory(articleId)} /> : activeNav === "Team profile" ? <TeamProfileView profile={teamProfile} loading={teamProfileLoading} error={teamProfileError} isFollowed={Boolean(selectedTeamId && preferences.followedTeamIds.includes(selectedTeamId))} onBack={() => setActiveNav("My teams")} onRetry={() => { if (selectedTeamId) void openTeamProfile(selectedTeamId); }} onToggleFollow={() => { if (selectedTeamId) toggleTeam(selectedTeamId); }} onOpenPlayer={(playerId) => void openPlayerProfile(playerId)} onOpenGame={openGameCenter} onOpenArticle={(articleId) => void openArticle(articleId, "Team profile")} /> : activeNav === "My teams" ? <>
         <div className="page-heading"><p className="overline">PERSONALIZE YOUR EXPERIENCE</p><h1>My teams</h1><p className="subhead">Choose the teams that should shape your feed, schedule, and alerts.</p>{preferenceStatus && <p className={preferenceStatus.startsWith("Save failed") || preferenceStatus.startsWith("Could not") ? "preference-status error" : "preference-status"}>{preferenceStatus}</p>}</div>
@@ -895,8 +1011,8 @@ function SportsWatchApp() {
       </>}
     </section>
 
-    {catchUpOpen && catchUpBrief && <div className="modal-backdrop" onClick={() => setCatchUpOpen(false)}><section className="catch-up-modal" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setCatchUpOpen(false)}>×</button><p className="overline">YOUR {catchUpBrief.readTimeMinutes}-MINUTE CATCH-UP</p><h2>{catchUpBrief.title}</h2><p className="modal-lede">{catchUpBrief.lede}</p><div className="catch-up-source"><i />{catchUpBrief.source === "play-by-play" ? "Built from live play-by-play" : "Built from the latest NBA coverage"}</div>{catchUpBrief.game && <div className="recap-stat-row"><div><strong>{catchUpBrief.game.awayScore ?? "—"}–{catchUpBrief.game.homeScore ?? "—"}</strong><span>{catchUpBrief.game.away.short} at {catchUpBrief.game.home.short}</span></div><div><strong>{catchUpBrief.game.status === "live" ? (catchUpBrief.game.period && catchUpBrief.game.period > 4 ? `OT${catchUpBrief.game.period - 4}` : `Q${catchUpBrief.game.period ?? "—"}`) : "FINAL"}</strong><span>{catchUpBrief.game.status === "live" ? catchUpBrief.game.clock ?? "Live" : "Game status"}</span></div><div><strong>{catchUpBrief.moments.length}</strong><span>Key updates</span></div></div>}<h3>{catchUpBrief.moments.length} updates that matter most</h3><ol className="moment-list">{catchUpBrief.moments.map((moment, index) => <li key={moment.id}><span>{String(index + 1).padStart(2, "0")}</span><p><strong>{moment.title}.</strong> {moment.detail}{moment.context && <small className="moment-context">{moment.context}</small>}<small>{moment.reason}</small></p></li>)}</ol><button className="modal-action" onClick={() => setCatchUpOpen(false)}>Back to my feed <span>→</span></button></section></div>}
+    {catchUpOpen && catchUpBrief && <CatchUpModal key={catchUpBrief.generatedAt} brief={catchUpBrief} onClose={() => setCatchUpOpen(false)} />}
     {authOpen && <AuthModal onClose={() => setAuthOpen(false)} />}
     {onboardingOpen && <OnboardingModal teams={teams} players={players} recommendedTeamIds={discovery.teams.map(({ team }) => team.id)} recommendedPlayerIds={discovery.players.map(({ player }) => player.id)} initialPreferences={preferences} />}
-  </main>;
+  </main></TimeZoneContext.Provider>;
 }

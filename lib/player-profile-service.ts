@@ -4,6 +4,7 @@ import { loadCatalog } from "./catalog-repository";
 import { getStatsProvider } from "./providers";
 import { mockStatsProvider } from "./providers/stats-provider";
 import { currentNbaSeasonStart } from "./season";
+import { calculatePlayerMetricRankings } from "./player-rankings";
 
 type CachedProfile = { profile: PlayerProfile; expiresAt: number };
 
@@ -24,11 +25,16 @@ export async function getPlayerProfile(playerId: string): Promise<PlayerProfile 
   if (cached && cached.expiresAt > Date.now()) return cached.profile;
 
   let profile: PlayerProfile;
+  let leagueStats = null;
   try {
     profile = await provider.getPlayerProfile(player, season);
+    if (profile.currentSeason) leagueStats = await provider.getSeasonStats(season).catch(() => null);
   } catch {
     profile = await mockStatsProvider.getPlayerProfile(player, season);
+    leagueStats = await mockStatsProvider.getSeasonStats(season);
   }
+
+  profile = { ...profile, currentSeasonRankings: leagueStats ? calculatePlayerMetricRankings(player.id, leagueStats.players) : null };
 
   profileCache.set(cacheKey, { profile, expiresAt: Date.now() + cacheDurationMs });
   return profile;

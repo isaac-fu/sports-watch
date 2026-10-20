@@ -118,6 +118,9 @@ export type PlayerStat = {
   pointsPerGame: number;
   reboundsPerGame: number;
   assistsPerGame: number;
+  stealsPerGame?: number;
+  blocksPerGame?: number;
+  turnoversPerGame?: number;
   fieldGoalPercentage: number;
   threePointPercentage: number;
 };
@@ -171,11 +174,22 @@ export type PlayerProfile = {
   player: Player;
   bio: PlayerBio;
   currentSeason: PlayerSeasonStat | null;
+  currentSeasonRankings?: PlayerMetricRankings | null;
   career: PlayerCareerStat | null;
   seasons: PlayerSeasonStat[];
   lastTenGames: PlayerGameLog[];
   source: string;
   updatedAt: string;
+};
+
+export type PlayerMetricRankings = {
+  pointsPerGame: number;
+  reboundsPerGame: number;
+  assistsPerGame: number;
+  stealsPerGame: number;
+  fieldGoalPercentage: number;
+  threePointPercentage: number;
+  playerCount: number;
 };
 
 export type TeamStat = {
@@ -189,10 +203,37 @@ export type TeamStat = {
   pointsAllowedPerGame: number;
 };
 
+export type TeamMetricRankings = {
+  record: number;
+  conference: number;
+  pointsPerGame: number;
+  pointsAllowedPerGame: number;
+  pointDifferential: number;
+  leagueSize: number;
+};
+
+export type TeamStanding = {
+  teamId: string;
+  teamName: string;
+  teamShort: string;
+  color: string;
+  imageUrl?: string;
+  conference: "Eastern" | "Western";
+  conferenceRank: number;
+  wins: number;
+  losses: number;
+  winPercentage: number;
+  pointDifferential: number;
+};
+
 export type TeamProfile = {
   team: Team;
   seasonLabel: string;
   stats: TeamStat;
+  rankings: TeamMetricRankings;
+  standings: TeamStanding[];
+  standingsSeasonLabel: string;
+  standingsUsesPreviousSeason: boolean;
   roster: Player[];
   recentGames: Game[];
   upcomingGames: Game[];
@@ -251,6 +292,7 @@ export type Account = {
   email: string;
   timezone: string;
   createdAt: string;
+  emailVerified: boolean;
 };
 
 export type FeedItem = {

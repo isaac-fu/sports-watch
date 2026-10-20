@@ -5,6 +5,7 @@ import { loadNewsArticles, loadSeasonStats } from "./content-repository";
 import { getGames } from "./mock-repository";
 import { getNbaProvider, getStatsProvider } from "./providers";
 import { currentNbaSeasonStart, nbaSeasonLabel } from "./season";
+import { buildTeamStandings, calculateTeamMetricRankings } from "./team-standings";
 
 type CachedTeamProfile = { profile: TeamProfile; expiresAt: number };
 
@@ -44,21 +45,29 @@ export async function getTeamProfile(teamId: string): Promise<TeamProfile | null
   const to = new Date();
   to.setDate(to.getDate() + 180);
 
-  const [statsSnapshot, newsSnapshot, gamesSnapshot, providerStats] = await Promise.all([
+  const [statsSnapshot, newsSnapshot, gamesSnapshot, providerStats, providerStandings] = await Promise.all([
     loadSeasonStats(season),
     loadNewsArticles(),
     provider.getGames({ teamId, from: dateKey(from), to: dateKey(to) })
       .then((games) => ({ games, source: provider.name }))
       .catch(() => ({ games: getGames({ teamId, from: dateKey(from), to: dateKey(to) }), source: "mock-repository" })),
     statsProvider.getTeamStats(team, season).catch(() => null),
+    statsProvider.getTeamStandings(season).catch(() => null),
   ]);
   const games = gamesSnapshot.games.filter((game) => game.home.id === teamId || game.away.id === teamId);
-  const stats = providerStats ?? statsSnapshot.teams.find((item) => item.teamId === teamId) ?? fallbackStats(team.id, team.name, team.record);
-  const source = Array.from(new Set([gamesSnapshot.source, providerStats ? statsProvider.name : statsSnapshot.source])).join(" + ");
+  const leagueStats = providerStandings?.teams.length ? providerStandings.teams : statsSnapshot.teams;
+  const stats = leagueStats.find((item) => item.teamId === teamId) ?? providerStats ?? statsSnapshot.teams.find((item) => item.teamId === teamId) ?? fallbackStats(team.id, team.name, team.record);
+  const rankingPool = leagueStats.some((item) => item.teamId === teamId) ? leagueStats : [...leagueStats, stats];
+  const standingsSeason = providerStandings?.teams.length ? providerStandings.season : stats.season ?? season;
+  const source = Array.from(new Set([gamesSnapshot.source, providerStats || providerStandings ? statsProvider.name : statsSnapshot.source])).join(" + ");
   const profile: TeamProfile = {
     team,
     seasonLabel: nbaSeasonLabel(stats.season ?? season),
     stats,
+    rankings: calculateTeamMetricRankings(teamId, rankingPool),
+    standings: buildTeamStandings(canonicalTeams, rankingPool),
+    standingsSeasonLabel: nbaSeasonLabel(standingsSeason),
+    standingsUsesPreviousSeason: standingsSeason < season,
     roster: canonicalPlayers.filter((player) => player.teamId === teamId),
     recentGames: games.filter((game) => game.status === "final").sort((left, right) => right.date.localeCompare(left.date)).slice(0, 5),
     upcomingGames: games.filter((game) => game.status !== "final").sort((left, right) => left.date.localeCompare(right.date)).slice(0, 5),

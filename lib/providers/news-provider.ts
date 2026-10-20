@@ -3,6 +3,7 @@ import type { NewsArticle } from "@/lib/models";
 import { canonicalPlayers, canonicalTeams } from "@/lib/catalog";
 import { mockNews } from "@/lib/mock-repository";
 import { classifyAndTagNews } from "@/lib/news-classifier";
+import { cleanNewsText } from "@/lib/news-text";
 
 export interface NewsProvider {
   readonly name: string;
@@ -26,13 +27,16 @@ function classifyText(...parts: Array<string | undefined>) {
 
 function mapArticle(article: NewsApiArticle): NewsArticle | null {
   if (!article.title || !article.url || !article.publishedAt) return null;
-  const classified = classifyText(article.title, article.description, article.content, article.url, article.source?.name);
+  const title = cleanNewsText(article.title);
+  const summary = cleanNewsText(article.description?.trim() || "Open the article for the full story.");
+  const source = cleanNewsText(article.source?.name?.trim() || "NewsAPI");
+  const classified = classifyText(title, summary, article.content, article.url, source);
   if (!classified.nbaRelated) return null;
   return {
     id: `newsapi-${createHash("sha256").update(article.url).digest("hex").slice(0, 20)}`,
-    title: article.title,
-    summary: article.description?.trim() || "Open the article for the full story.",
-    source: article.source?.name?.trim() || "NewsAPI",
+    title,
+    summary,
+    source,
     publishedAt: new Date(article.publishedAt).toISOString(),
     url: article.url,
     imageUrl: article.urlToImage || undefined,

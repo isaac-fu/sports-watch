@@ -1,4 +1,4 @@
-import type { CatchUpBrief, Game, GameCenter, NewsArticle, Preferences } from "@/lib/models";
+import type { CatchUpBrief, Game, GameCenter, NewsArticle, Preferences, SavedArticle } from "@/lib/models";
 import { canonicalPlayers, canonicalTeams } from "@/lib/catalog";
 import { mockNews } from "@/lib/mock-repository";
 import { generateAlertCandidates, generateGameCandidates, generateGameEventCandidates, generateNewsCandidates, generatePlayerCandidates, generateTeamCandidates } from "./candidate-generators";
@@ -7,15 +7,16 @@ import { rankAlertCandidates, rankCatchUpCandidates, rankGameCandidates, rankGam
 const feedBackfillTarget = 8;
 const recentNewsWindowMs = 7 * 24 * 60 * 60 * 1000;
 
-export function getPersonalizedFeed(preferences: Preferences, articles: NewsArticle[] = mockNews) {
-  const personalized = rankNewsCandidates(generateNewsCandidates(articles, canonicalTeams, canonicalPlayers, preferences));
+export function getPersonalizedFeed(preferences: Preferences, articles: NewsArticle[] = mockNews, savedArticles: SavedArticle[] = []) {
+  const personalized = rankNewsCandidates(generateNewsCandidates(articles, canonicalTeams, canonicalPlayers, preferences, savedArticles));
   if (articles.length === 0) return personalized;
+  const savedIds = new Set(savedArticles.map((article) => article.id));
   const popular = rankNewsCandidates(generateNewsCandidates(articles, canonicalTeams, canonicalPlayers, {
     ...preferences,
     followedTeamIds: [],
     followedPlayerIds: [],
-  }));
-  const coldStart = preferences.followedTeamIds.length === 0 && preferences.followedPlayerIds.length === 0;
+  })).filter((item) => !savedIds.has(item.id));
+  const coldStart = preferences.followedTeamIds.length === 0 && preferences.followedPlayerIds.length === 0 && savedArticles.length === 0;
   if (coldStart || personalized.length >= feedBackfillTarget) return coldStart ? popular : personalized;
 
   const recentCutoff = Date.now() - recentNewsWindowMs;
@@ -33,9 +34,9 @@ export function getPersonalizedFeed(preferences: Preferences, articles: NewsArti
   return combined.sort((left, right) => new Date(right.publishedAt).getTime() - new Date(left.publishedAt).getTime() || right.relevanceScore - left.relevanceScore);
 }
 
-export function getDiscoveryRecommendations(preferences: Preferences, games: Game[], articles: NewsArticle[] = mockNews) {
-  const inputs = { teams: canonicalTeams, players: canonicalPlayers, articles, games };
-  const coldStart = preferences.followedTeamIds.length === 0 && preferences.followedPlayerIds.length === 0;
+export function getDiscoveryRecommendations(preferences: Preferences, games: Game[], articles: NewsArticle[] = mockNews, savedArticles: SavedArticle[] = []) {
+  const inputs = { teams: canonicalTeams, players: canonicalPlayers, articles, games, savedArticles };
+  const coldStart = preferences.followedTeamIds.length === 0 && preferences.followedPlayerIds.length === 0 && savedArticles.length === 0;
   return {
     teams: rankTeamCandidates(generateTeamCandidates(inputs, preferences)),
     players: rankPlayerCandidates(generatePlayerCandidates(inputs, preferences)),
@@ -57,13 +58,13 @@ export function selectCatchUpGame(preferences: Preferences, games: Game[]) {
     .sort((left, right) => Number(right.status === "live") - Number(left.status === "live") || gameRecency(right).localeCompare(gameRecency(left)))[0] ?? null;
 }
 
-export function getCatchUpBrief(preferences: Preferences, games: Game[], articles: NewsArticle[] = mockNews, gameCenter: GameCenter | null = null): CatchUpBrief {
+export function getCatchUpBrief(preferences: Preferences, games: Game[], articles: NewsArticle[] = mockNews, gameCenter: GameCenter | null = null, savedArticles: SavedArticle[] = []): CatchUpBrief {
   const coldStart = preferences.followedTeamIds.length === 0 && preferences.followedPlayerIds.length === 0;
   const relevantGame = gameCenter ? (gameCenter.game.status !== "scheduled" ? gameCenter.game : null) : selectCatchUpGame(preferences, games);
   const eventMoments = gameCenter && relevantGame?.id === gameCenter.game.id
     ? rankGameEventCandidates(generateGameEventCandidates(gameCenter, preferences))
     : [];
-  const newsMoments = rankCatchUpCandidates(generateNewsCandidates(articles, canonicalTeams, canonicalPlayers, preferences));
+  const newsMoments = rankCatchUpCandidates(generateNewsCandidates(articles, canonicalTeams, canonicalPlayers, preferences, savedArticles));
   const moments = eventMoments.length > 0 ? eventMoments : newsMoments;
   const source: CatchUpBrief["source"] = eventMoments.length > 0 ? "play-by-play" : "news";
   const followedPlayerTeamIds = new Set(canonicalPlayers.filter((player) => preferences.followedPlayerIds.includes(player.id)).map((player) => player.teamId));

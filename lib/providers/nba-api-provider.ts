@@ -3,7 +3,7 @@ import { canonicalPlayers, canonicalTeams } from "@/lib/catalog";
 import type { Player, PlayerProfile, Team, TeamStat } from "@/lib/models";
 import { currentNbaSeasonStart } from "@/lib/season";
 import type { CatalogProvider } from "./types";
-import type { SeasonStats, StatsProvider } from "./stats-provider";
+import type { SeasonStats, StatsProvider, TeamStandingsSnapshot } from "./stats-provider";
 
 type NbaApiOptions = {
   baseUrl?: string;
@@ -70,5 +70,11 @@ export class NbaApiProvider implements CatalogProvider, StatsProvider {
 
   async getTeamStats(team: Team, season: number): Promise<TeamStat | null> {
     return this.request<TeamStat | null>("/v1/team-stats", { season, team });
+  }
+
+  async getTeamStandings(season: number): Promise<TeamStandingsSnapshot> {
+    const standings = await this.request<TeamStandingsSnapshot>("/v1/team-standings", { season, teams: canonicalTeams });
+    if (!Number.isInteger(standings.season) || !Array.isArray(standings.teams)) throw new Error("nba_api returned invalid team standings.");
+    return standings;
   }
 }

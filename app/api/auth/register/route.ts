@@ -1,5 +1,5 @@
-import { createSession, DuplicateEmailError, registerAccount } from "@/lib/auth-repository";
-import { sessionCookie } from "@/lib/auth-session";
+import { createEmailVerification, DuplicateEmailError, registerAccount } from "@/lib/auth-repository";
+import { sendVerificationEmail } from "@/lib/email-service";
 
 export const dynamic = "force-dynamic";
 
@@ -19,10 +19,13 @@ export async function POST(request: Request) {
 
   try {
     const account = await registerAccount({ displayName, email, password, timezone });
-    const session = await createSession(account.id);
-    return Response.json({ data: account, meta: { authenticated: true } }, {
+    const verification = await createEmailVerification(account.id, "signup");
+    const baseUrl = process.env.APP_BASE_URL?.trim() || new URL(request.url).origin;
+    const verificationUrl = new URL(`/api/auth/verify-email?token=${encodeURIComponent(verification.token)}`, baseUrl).toString();
+    const delivery = await sendVerificationEmail({ to: account.email, displayName: account.displayName, verificationUrl, purpose: "signup" });
+    return Response.json({ data: account, meta: { authenticated: false, verificationRequired: true, emailProvider: delivery.provider, previewUrl: delivery.previewUrl } }, {
       status: 201,
-      headers: { "Set-Cookie": sessionCookie(session.token, session.expiresAt), "Cache-Control": "no-store" },
+      headers: { "Cache-Control": "no-store" },
     });
   } catch (error) {
     if (error instanceof DuplicateEmailError) return Response.json({ error: error.message }, { status: 409 });

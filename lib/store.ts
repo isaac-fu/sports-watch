@@ -23,7 +23,7 @@ export function createDefaultPreferences(followDemoFavorites = false): Preferenc
 }
 
 const defaultStore: AppStore = {
-  account: { id: demoAccountId, displayName: "Alex Morgan", email: "alex@example.com", timezone: "America/Los_Angeles", createdAt: "2025-01-12T18:00:00.000Z" },
+  account: { id: demoAccountId, displayName: "Alex Morgan", email: "alex@example.com", timezone: "America/Los_Angeles", createdAt: "2025-01-12T18:00:00.000Z", emailVerified: true },
   preferences: createDefaultPreferences(true),
 };
 

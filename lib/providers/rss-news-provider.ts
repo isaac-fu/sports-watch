@@ -3,6 +3,7 @@ import { XMLParser } from "fast-xml-parser";
 import { canonicalPlayers, canonicalTeams } from "@/lib/catalog";
 import type { NewsArticle } from "@/lib/models";
 import { classifyAndTagNews } from "@/lib/news-classifier";
+import { cleanNewsText, decodeHtmlEntities } from "@/lib/news-text";
 import type { NewsProvider } from "./news-provider";
 
 type XmlRecord = Record<string, unknown>;
@@ -26,15 +27,12 @@ function textValue(value: unknown): string {
 }
 
 function stripHtml(value: string) {
-  return value.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+  return cleanNewsText(value.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
     .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
     .replace(/<[^>]+>/g, " ")
     .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;|&apos;/gi, "'")
     .replace(/\s+/g, " ")
-    .trim();
+    .trim());
 }
 
 function linkValue(value: unknown): string {
@@ -92,7 +90,7 @@ function mapEntry(entry: XmlRecord, source: RssFeedSource, feedTitle: string): N
   if (!title || !url || !publishedAt) return null;
   const rawSummary = textValue(entry.description ?? entry.summary ?? entry["content:encoded"] ?? entry.content);
   const summary = stripHtml(rawSummary).slice(0, 600) || "Open the article for the full story.";
-  const publisher = source.name || feedTitle || textValue(entry.source) || sourceHost(url);
+  const publisher = decodeHtmlEntities(source.name || feedTitle || textValue(entry.source) || sourceHost(url));
   const classified = classifyAndTagNews([title, summary, publisher, url], canonicalTeams, canonicalPlayers);
   if (!source.trustedNba && !classified.nbaRelated) return null;
   return {

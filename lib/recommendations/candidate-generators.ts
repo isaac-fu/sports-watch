@@ -1,4 +1,4 @@
-import type { AlertCandidate, Game, GameCenter, NewsArticle, Player, Preferences, Team } from "@/lib/models";
+import type { AlertCandidate, Game, GameCenter, NewsArticle, Player, Preferences, SavedArticle, Team } from "@/lib/models";
 import { canonicalPlayers } from "@/lib/catalog";
 import { formatPacificTipTime, scheduledGameTimestamp } from "@/lib/game-time";
 import { classifyNewsText } from "@/lib/news-classifier";
@@ -14,19 +14,26 @@ function importanceFor(article: NewsArticle) {
   return 4;
 }
 
-export function generateNewsCandidates(articles: NewsArticle[], teams: Team[], players: Player[], preferences: Preferences): NewsCandidate[] {
-  const coldStart = preferences.followedTeamIds.length === 0 && preferences.followedPlayerIds.length === 0;
+export function generateNewsCandidates(articles: NewsArticle[], teams: Team[], players: Player[], preferences: Preferences, savedArticles: SavedArticle[] = []): NewsCandidate[] {
+  const savedIds = new Set(savedArticles.map((article) => article.id));
+  const savedTeamIds = new Set(savedArticles.flatMap((article) => article.teamIds));
+  const savedPlayerIds = new Set(savedArticles.flatMap((article) => article.playerIds));
+  const coldStart = preferences.followedTeamIds.length === 0 && preferences.followedPlayerIds.length === 0 && savedArticles.length === 0;
   return articles.flatMap((article) => {
+    if (savedIds.has(article.id)) return [];
     const inferred = classifyNewsText([article.title, article.summary, article.source, article.url], teams, players);
     const articleTeamIds = new Set([...article.teamIds, ...inferred.teamIds]);
     const articlePlayerIds = new Set([...article.playerIds, ...inferred.playerIds]);
     if (articleTeamIds.size === 0 && articlePlayerIds.size === 0 && !inferred.nbaRelated) return [];
     const matchedTeams = teams.filter((team) => preferences.followedTeamIds.includes(team.id) && articleTeamIds.has(team.id));
     const matchedPlayers = players.filter((player) => preferences.followedPlayerIds.includes(player.id) && articlePlayerIds.has(player.id));
+    const savedInterestScore = Array.from(articleTeamIds).filter((id) => savedTeamIds.has(id)).length * 18
+      + Array.from(articlePlayerIds).filter((id) => savedPlayerIds.has(id)).length * 30;
     const importanceScore = importanceFor(article);
     const sources: NewsCandidate["sources"] = [];
     if (matchedTeams.length) sources.push("followed-team");
     if (matchedPlayers.length) sources.push("followed-player");
+    if (savedInterestScore > 0) sources.push("saved-interest");
     if (importanceScore >= 15) sources.push("important-league-update");
     if (coldStart) sources.push("popular-league-update");
     if (sources.length === 0) return [];
@@ -38,6 +45,7 @@ export function generateNewsCandidates(articles: NewsArticle[], teams: Team[], p
       freshnessHours: Math.max(0, (Date.now() - new Date(article.publishedAt).getTime()) / 3_600_000),
       importanceScore,
       sourceQualityScore: article.source.startsWith("Sports Watch") ? 8 : 6,
+      savedInterestScore,
       sources,
     }];
   });
@@ -56,6 +64,7 @@ export function generateTeamCandidates(inputs: RecommendationInputs, preferences
     }).length,
     articleMentionCount: inputs.articles.filter((article) => article.teamIds.includes(team.id)).length,
     nationalGameCount: inputs.games.filter((game) => nationallyVisible(game) && (game.home.id === team.id || game.away.id === team.id)).length,
+    savedArticleMentionCount: inputs.savedArticles.filter((article) => article.teamIds.includes(team.id)).length,
     coldStart,
   }));
 }
@@ -73,6 +82,7 @@ export function generatePlayerCandidates(inputs: RecommendationInputs, preferenc
     upcomingOpponent: opponentTeamIds.has(player.teamId),
     articleMentionCount: inputs.articles.filter((article) => article.playerIds.includes(player.id)).length,
     teamNationalGameCount: inputs.games.filter((game) => nationallyVisible(game) && (game.home.id === player.teamId || game.away.id === player.teamId)).length,
+    savedArticleMentionCount: inputs.savedArticles.filter((article) => article.playerIds.includes(player.id)).length,
     coldStart,
   }));
 }

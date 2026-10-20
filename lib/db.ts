@@ -12,9 +12,9 @@ export async function loadAccount(accountId: string): Promise<Account | null> {
   const pool = getDbPool();
   if (!pool) return null;
   try {
-    const result = await pool.query("SELECT id, display_name, email, timezone, created_at FROM accounts WHERE id = $1", [accountId]);
+    const result = await pool.query("SELECT id, display_name, email, timezone, created_at, email_verified_at FROM accounts WHERE id = $1", [accountId]);
     const row = result.rows[0];
-    return row ? { id: row.id, displayName: row.display_name, email: row.email, timezone: row.timezone, createdAt: new Date(row.created_at).toISOString() } : null;
+    return row ? { id: row.id, displayName: row.display_name, email: row.email, timezone: row.timezone, createdAt: new Date(row.created_at).toISOString(), emailVerified: Boolean(row.email_verified_at) } : null;
   } catch { return null; }
 }
 

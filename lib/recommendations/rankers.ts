@@ -2,19 +2,21 @@ import type { AlertCandidate, CatchUpMoment, FeedItem } from "@/lib/models";
 import type { GameCandidate, GameEventCandidate, GameRecommendation, NewsCandidate, PlayerCandidate, PlayerRecommendation, TeamCandidate, TeamRecommendation } from "./types";
 
 export function rankNewsCandidates(candidates: NewsCandidate[]): FeedItem[] {
-  const ranked = candidates.map(({ article, matchedPlayers, matchedTeams, freshnessHours, importanceScore, sourceQualityScore, sources }) => {
+  const ranked = candidates.map(({ article, matchedPlayers, matchedTeams, freshnessHours, importanceScore, sourceQualityScore, savedInterestScore, sources }) => {
     const freshnessScore = Math.max(0, 15 - Math.floor(freshnessHours));
     const coldStart = sources.includes("popular-league-update");
     const relevanceScore = Math.min(100, coldStart
       ? freshnessScore + importanceScore * 3 + sourceQualityScore * 2
-      : matchedPlayers.length * 45 + matchedTeams.length * 25 + freshnessScore + importanceScore + sourceQualityScore);
+      : matchedPlayers.length * 45 + matchedTeams.length * 25 + savedInterestScore + freshnessScore + importanceScore + sourceQualityScore);
     const isPerformance = article.tags.includes("performance");
     const isInjury = article.tags.includes("injury");
     const reason = matchedPlayers.length > 0
       ? `Because you follow ${matchedPlayers.map((player) => player.name).join(", ")}`
       : matchedTeams.length > 0
         ? `Because you follow ${matchedTeams.map((team) => team.name).join(", ")}`
-        : coldStart ? "Popular across recent NBA coverage" : "A significant update from around the league";
+        : sources.includes("saved-interest")
+          ? "Based on NBA stories you saved"
+          : coldStart ? "Popular across recent NBA coverage" : "A significant update from around the league";
     return {
       id: article.id,
       kind: isPerformance ? "performance" as const : isInjury ? "injury" as const : "story" as const,
@@ -84,10 +86,10 @@ export function rankGameEventCandidates(candidates: GameEventCandidate[], limit 
 }
 
 export function rankTeamCandidates(candidates: TeamCandidate[], limit = 8): TeamRecommendation[] {
-  const personalized = candidates.filter((candidate) => !candidate.coldStart && (candidate.followedPlayerCount > 0 || candidate.upcomingOpponentCount > 0)).map((candidate) => ({
+  const personalized = candidates.filter((candidate) => !candidate.coldStart && (candidate.followedPlayerCount > 0 || candidate.upcomingOpponentCount > 0 || candidate.savedArticleMentionCount > 0)).map((candidate) => ({
     team: candidate.team,
-    score: Math.min(100, candidate.followedPlayerCount * 55 + candidate.upcomingOpponentCount * 18 + Math.min(15, candidate.articleMentionCount * 5)),
-    reason: candidate.followedPlayerCount > 0 ? "You already follow a player on this team" : "They play one of your teams soon",
+    score: Math.min(100, candidate.followedPlayerCount * 55 + candidate.upcomingOpponentCount * 18 + candidate.savedArticleMentionCount * 24 + Math.min(15, candidate.articleMentionCount * 5)),
+    reason: candidate.followedPlayerCount > 0 ? "You already follow a player on this team" : candidate.savedArticleMentionCount > 0 ? "Featured in stories you saved" : "They play one of your teams soon",
   })).sort((left, right) => right.score - left.score || left.team.name.localeCompare(right.team.name));
 
   const personalizedIds = new Set(personalized.map(({ team }) => team.id));
@@ -105,10 +107,10 @@ export function rankTeamCandidates(candidates: TeamCandidate[], limit = 8): Team
 }
 
 export function rankPlayerCandidates(candidates: PlayerCandidate[], limit = 8): PlayerRecommendation[] {
-  const personalized = candidates.filter((candidate) => !candidate.coldStart && (candidate.playsForFollowedTeam || candidate.upcomingOpponent)).map((candidate) => ({
+  const personalized = candidates.filter((candidate) => !candidate.coldStart && (candidate.playsForFollowedTeam || candidate.upcomingOpponent || candidate.savedArticleMentionCount > 0)).map((candidate) => ({
     player: candidate.player,
-    score: Math.min(100, (candidate.playsForFollowedTeam ? 50 : 0) + (candidate.upcomingOpponent ? 25 : 0) + Math.min(20, candidate.articleMentionCount * 10)),
-    reason: candidate.playsForFollowedTeam ? "Plays for a team you follow" : "Featured in an upcoming matchup",
+    score: Math.min(100, (candidate.playsForFollowedTeam ? 50 : 0) + (candidate.upcomingOpponent ? 25 : 0) + candidate.savedArticleMentionCount * 30 + Math.min(20, candidate.articleMentionCount * 10)),
+    reason: candidate.playsForFollowedTeam ? "Plays for a team you follow" : candidate.savedArticleMentionCount > 0 ? "Featured in stories you saved" : "Featured in an upcoming matchup",
   })).sort((left, right) => right.score - left.score || left.player.name.localeCompare(right.player.name));
 
   const personalizedIds = new Set(personalized.map(({ player }) => player.id));

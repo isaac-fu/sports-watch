@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatPacificTipTime, pacificDateKey, scheduledGameTimestamp } from "@/lib/game-time";
+import { formatPacificTipTime, formatTipTime, greetingForTimeZone, pacificDateKey, scheduledGameTimestamp } from "@/lib/game-time";
 
 describe("Pacific schedule times", () => {
   it("converts an absolute tip time to the Pacific calendar date and display time", () => {
@@ -18,5 +18,12 @@ describe("Pacific schedule times", () => {
   it("uses the exact provider timestamp for alert scheduling", () => {
     const startsAt = "2026-12-21T03:30:00.000Z";
     expect(scheduledGameTimestamp({ startsAt, date: "2026-12-20", time: "7:30 PM PST" })).toBe(Date.parse(startsAt));
+  });
+
+  it("formats tip times and greetings in the account timezone", () => {
+    const startsAt = "2026-10-21T02:30:00.000Z";
+    expect(formatTipTime(startsAt, "7:30 PM PST", "America/New_York", "2026-10-20")).toMatch(/^10:30 PM E(?:D|S)T$/);
+    expect(greetingForTimeZone("America/New_York", new Date("2026-10-20T17:00:00.000Z"))).toBe("Good afternoon");
+    expect(greetingForTimeZone("America/Los_Angeles", new Date("2026-10-20T17:00:00.000Z"))).toBe("Good morning");
   });
 });

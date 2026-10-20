@@ -235,6 +235,9 @@ def _player_stat(player: dict[str, Any], season: int, row: dict[str, Any]) -> di
         "pointsPerGame": _rounded(_number(row, "PTS")),
         "reboundsPerGame": _rounded(_number(row, "REB")),
         "assistsPerGame": _rounded(_number(row, "AST")),
+        "stealsPerGame": _rounded(_number(row, "STL")),
+        "blocksPerGame": _rounded(_number(row, "BLK")),
+        "turnoversPerGame": _rounded(_number(row, "TOV")),
         "fieldGoalPercentage": _percentage(_number(row, "FG_PCT")),
         "threePointPercentage": _percentage(_number(row, "FG3_PCT")),
     }
@@ -526,6 +529,28 @@ def team_stats(payload: dict[str, Any] = Body(...)) -> dict[str, Any] | None:
         return None
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"NBA team stats request failed: {exc}") from exc
+
+
+@app.post("/v1/team-standings")
+def team_standings(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    try:
+        requested = int(payload["season"])
+        teams = list(payload.get("teams") or [])
+        for season in (requested, requested - 1):
+            try:
+                rows = _standings(season)
+            except Exception:
+                continue
+            mapped = []
+            for team in teams:
+                row = _find_team_row(team, rows)
+                if row and _integer(row, "WINS", "W") + _integer(row, "LOSSES", "L") > 0:
+                    mapped.append(_team_stat(team, season, row))
+            if mapped:
+                return {"season": season, "teams": mapped}
+        return {"season": requested, "teams": []}
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"NBA team standings request failed: {exc}") from exc
 
 
 @app.post("/v1/player-profile")

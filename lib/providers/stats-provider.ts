@@ -4,12 +4,14 @@ import { mockPlayerStats, mockTeamStats } from "@/lib/mock-repository";
 import { nbaSeasonLabel } from "@/lib/season";
 
 export type SeasonStats = { players: PlayerStat[]; teams: TeamStat[] };
+export type TeamStandingsSnapshot = { season: number; teams: TeamStat[] };
 
 export interface StatsProvider {
   readonly name: string;
   getSeasonStats(season: number): Promise<SeasonStats>;
   getPlayerProfile(player: Player, season: number): Promise<PlayerProfile>;
   getTeamStats(team: Team, season: number): Promise<TeamStat | null>;
+  getTeamStandings(season: number): Promise<TeamStandingsSnapshot>;
 }
 
 type BdlTeam = { id: number; full_name?: string; abbreviation?: string };
@@ -393,6 +395,12 @@ export class BallDontLieStatsProvider implements StatsProvider {
     return (await this.getTeamSeasonStats(season - 1, [id]))[0] ?? null;
   }
 
+  async getTeamStandings(season: number) {
+    const current = await this.getTeamSeasonStats(season);
+    if (current.some((stat) => stat.wins + stat.losses > 0)) return { season, teams: current };
+    return { season: season - 1, teams: await this.getTeamSeasonStats(season - 1) };
+  }
+
   async getPlayerProfile(player: Player, season: number): Promise<PlayerProfile> {
     const providerPlayer = await this.resolvePlayer(player);
     if (!providerPlayer) throw new Error("BALLDONTLIE could not resolve this player.");
@@ -428,5 +436,23 @@ export const mockStatsProvider: StatsProvider = {
   async getTeamStats(team, season) {
     const stat = mockTeamStats.find((item) => item.teamId === team.id);
     return stat ? { ...stat, season } : null;
+  },
+  async getTeamStandings(season) {
+    const teams = canonicalTeams.map((team, index) => {
+      const existing = mockTeamStats.find((stat) => stat.teamId === team.id);
+      if (existing) return { ...existing, season };
+      const [recordWins = 24 + index, recordLosses = 18 + (index % 9)] = team.record.split(/[–-]/).map(Number);
+      return {
+        teamId: team.id,
+        teamName: team.name,
+        season,
+        wins: Number.isFinite(recordWins) ? recordWins : 24 + index,
+        losses: Number.isFinite(recordLosses) ? recordLosses : 18 + (index % 9),
+        conferenceRank: 1 + (index % 15),
+        pointsPerGame: rounded(108.5 + (index * 1.37) % 12),
+        pointsAllowedPerGame: rounded(107.8 + (index * 1.11) % 12),
+      };
+    });
+    return { season, teams };
   },
 };

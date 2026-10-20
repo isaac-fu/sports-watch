@@ -78,4 +78,16 @@ describe("nba_api service adapter", () => {
     expect(catalog.teams[0].providerId).toBe("1610612744");
     expect(catalog.players[0].providerId).toBe("201939");
   });
+
+  it("loads standings with the season selected by the service fallback", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+      season: 2025,
+      teams: [{ teamId: "gsw", teamName: warriors.name, season: 2025, wins: 48, losses: 34, conferenceRank: 6, pointsPerGame: 113.8, pointsAllowedPerGame: 112.1 }],
+    })));
+
+    const provider = new NbaApiProvider({ baseUrl: "http://nba.test" });
+    const result = await provider.getTeamStandings(2026);
+
+    expect(result).toMatchObject({ season: 2025, teams: [expect.objectContaining({ teamId: "gsw", wins: 48 })] });
+  });
 });

@@ -5,11 +5,13 @@ CREATE TABLE IF NOT EXISTS accounts (
   timezone TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL,
   password_hash TEXT,
-  onboarding_completed BOOLEAN NOT NULL DEFAULT FALSE
+  onboarding_completed BOOLEAN NOT NULL DEFAULT FALSE,
+  email_verified_at TIMESTAMPTZ
 );
 
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS password_hash TEXT;
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS onboarding_completed BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;
 CREATE UNIQUE INDEX IF NOT EXISTS accounts_email_lower_idx ON accounts (LOWER(email));
 
 CREATE TABLE IF NOT EXISTS account_preferences (
@@ -46,6 +48,17 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
 
 CREATE INDEX IF NOT EXISTS auth_sessions_account_idx ON auth_sessions (account_id);
 CREATE INDEX IF NOT EXISTS auth_sessions_expiry_idx ON auth_sessions (expires_at);
+
+CREATE TABLE IF NOT EXISTS email_verification_tokens (
+  token_hash TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  purpose TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  consumed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS email_verification_account_idx ON email_verification_tokens (account_id);
 
 CREATE TABLE IF NOT EXISTS news_articles (
   id TEXT PRIMARY KEY,
@@ -154,6 +167,7 @@ VALUES ('account-demo', 'Alex Morgan', 'alex@example.com', 'America/Los_Angeles'
 ON CONFLICT (id) DO NOTHING;
 
 UPDATE accounts SET onboarding_completed=TRUE WHERE id='account-demo';
+UPDATE accounts SET email_verified_at=COALESCE(email_verified_at, created_at) WHERE id='account-demo';
 
 INSERT INTO account_preferences (account_id, followed_team_ids, followed_player_ids, alerts)
 VALUES (

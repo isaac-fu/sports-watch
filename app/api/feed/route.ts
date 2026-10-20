@@ -5,6 +5,7 @@ import { getAccountContext } from "@/lib/auth-session";
 import { loadCatalog } from "@/lib/catalog-repository";
 import { recordSyncResult } from "@/lib/content-repository";
 import { syncNews } from "@/lib/data-sync-service";
+import { listSavedArticles } from "@/lib/saved-articles-repository";
 
 export const dynamic = "force-dynamic";
 
@@ -20,9 +21,9 @@ function requestedLimit(request: Request) {
 async function feedPayload(request: Request) {
   const limit = requestedLimit(request);
   const context = await getAccountContext(request);
-  const [preferences, news] = await Promise.all([getCurrentPreferences(context.accountId), loadNewsArticles(), loadCatalog()]);
-  const mode = preferences.followedTeamIds.length === 0 && preferences.followedPlayerIds.length === 0 ? "popular" : "personalized";
-  const data = getPersonalizedFeed(preferences, news.articles).slice(0, limit);
+  const [preferences, news, , savedArticles] = await Promise.all([getCurrentPreferences(context.accountId), loadNewsArticles(), loadCatalog(), listSavedArticles(context.accountId)]);
+  const mode = preferences.followedTeamIds.length === 0 && preferences.followedPlayerIds.length === 0 && savedArticles.length === 0 ? "popular" : "personalized";
+  const data = getPersonalizedFeed(preferences, news.articles, savedArticles).slice(0, limit);
   return { data, meta: { count: data.length, mode, source: "candidate-generator-and-feed-ranker", contentSource: news.source, syncedAt: news.syncedAt } };
 }
 
