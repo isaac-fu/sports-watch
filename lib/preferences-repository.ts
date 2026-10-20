@@ -24,6 +24,7 @@ export function cachePreferences(accountId: string, preferences: Preferences) {
 }
 
 export async function getCurrentPreferences(accountId = demoAccountId): Promise<Preferences> {
+  if (accountId === demoAccountId) return normalizePreferences(createDefaultPreferences(true));
   const persisted = await loadPreferences(accountId);
   if (persisted) cachePreferences(accountId, persisted);
   const current = memoryPreferences[accountId] ?? createDefaultPreferences(accountId === demoAccountId);
@@ -33,6 +34,7 @@ export async function getCurrentPreferences(accountId = demoAccountId): Promise<
 }
 
 export async function updateCurrentPreferences(accountId: string, preferences: Preferences): Promise<Preferences> {
+  if (accountId === demoAccountId) throw new Error("The shared demo profile is read-only.");
   const normalized = normalizePreferences(preferences);
   cachePreferences(accountId, normalized);
   await savePreferences(accountId, normalized);

@@ -2,7 +2,6 @@ import type { TeamProfile, TeamStat } from "./models";
 import { canonicalPlayers, canonicalTeams } from "./catalog";
 import { loadCatalog } from "./catalog-repository";
 import { loadNewsArticles, loadSeasonStats } from "./content-repository";
-import { getGames } from "./mock-repository";
 import { getNbaProvider, getStatsProvider } from "./providers";
 import { currentNbaSeasonStart, nbaSeasonLabel } from "./season";
 import { buildTeamStandings, calculateTeamMetricRankings } from "./team-standings";
@@ -50,7 +49,7 @@ export async function getTeamProfile(teamId: string): Promise<TeamProfile | null
     loadNewsArticles(),
     provider.getGames({ teamId, from: dateKey(from), to: dateKey(to) })
       .then((games) => ({ games, source: provider.name }))
-      .catch(() => ({ games: getGames({ teamId, from: dateKey(from), to: dateKey(to) }), source: "mock-repository" })),
+      .catch(() => ({ games: [], source: `${provider.name}-unavailable` })),
     statsProvider.getTeamStats(team, season).catch(() => null),
     statsProvider.getTeamStandings(season).catch(() => null),
   ]);

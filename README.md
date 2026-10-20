@@ -118,7 +118,7 @@ The schedule screen reads from `GET /api/games`. The `alert-worker` polls the pr
 
 ## Accounts and sessions
 
-Guests can explore using the shared demo profile. Registering creates an isolated account with empty team/player favorites and default alert settings. Passwords are stored as salted scrypt hashes; session cookies are HTTP-only and SameSite=Lax, and only SHA-256 session-token hashes are persisted.
+Guests can explore using a read-only demo profile with fixed Warriors/Curry favorites; saving, following, and alert mutations require an account. Registering creates an isolated account with empty team/player favorites and default alert settings. Passwords are stored as salted scrypt hashes; session cookies are HTTP-only and SameSite=Lax, and only SHA-256 session-token hashes are persisted. Login, registration, and password recovery endpoints are rate limited. Forgot-password emails use hashed, one-hour, single-use reset tokens; completing a reset verifies the email and revokes every existing session. Changing a password while signed in also revokes every session before requiring email verification again.
 
 For local HTTP development, keep `AUTH_COOKIE_SECURE=false`. Set it to `true` behind HTTPS in a deployed environment. Replace `ALERT_WORKER_TOKEN` with a long random secret anywhere outside local development.
 
@@ -132,7 +132,7 @@ Copy-Item .env.example .env
 docker compose up -d --build
 ```
 
-BALLDONTLIE requires an API key and exposes date-filtered NBA games through `/v1/games` plus play-by-play through `/v1/plays` for supported games. The adapter maps provider teams, statuses, scores, clocks, and plays into the app’s internal game-center model. If live play-by-play is unavailable, the score still loads and the interface clearly reports that the timeline is unavailable; mock mode includes deterministic live and final-game timelines for local development.
+BALLDONTLIE requires an API key and exposes date-filtered NBA games through `/v1/games` plus play-by-play through `/v1/plays` for supported games. The adapter maps provider teams, statuses, scores, clocks, and plays into the app’s internal game-center model. If the configured real provider is unavailable, game-backed sections stay empty or use real news rather than exposing fabricated games. If live play-by-play is unavailable, the score still loads and the interface clearly reports that the timeline is unavailable; explicitly configured mock mode includes deterministic live and final-game timelines for local development.
 
 ## External news and stats
 

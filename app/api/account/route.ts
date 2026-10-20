@@ -1,4 +1,4 @@
-import { getAccountContext } from "@/lib/auth-session";
+import { clearedSessionCookie, getAccountContext } from "@/lib/auth-session";
 import { createEmailVerification, getOnboardingCompleted, InvalidCurrentPasswordError, updateAccountSettings } from "@/lib/auth-repository";
 import { sendVerificationEmail } from "@/lib/email-service";
 
@@ -38,7 +38,7 @@ export async function PATCH(request: Request) {
       const baseUrl = process.env.APP_BASE_URL?.trim() || new URL(request.url).origin;
       const verificationUrl = new URL(`/api/auth/verify-email?token=${encodeURIComponent(verification.token)}`, baseUrl).toString();
       const delivery = await sendVerificationEmail({ to: account.email, displayName: account.displayName, verificationUrl, purpose: "password-change" });
-      return Response.json({ data: account, meta: { verificationRequired: true, emailProvider: delivery.provider, previewUrl: delivery.previewUrl } }, { headers: { "Cache-Control": "no-store" } });
+      return Response.json({ data: account, meta: { verificationRequired: true, signedOut: true, emailProvider: delivery.provider, previewUrl: delivery.previewUrl } }, { headers: { "Cache-Control": "no-store", "Set-Cookie": clearedSessionCookie() } });
     }
     return Response.json({ data: account, meta: { verificationRequired: false } }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {

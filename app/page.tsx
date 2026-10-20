@@ -236,11 +236,70 @@ const safeExternalUrl = (value: string) => {
     return url.protocol === "http:" || url.protocol === "https:" ? url.toString() : null;
   } catch { return null; }
 };
+
+function renderAssistantInline(value: string): ReactNode[] {
+  const tokens = value.split(/(`[^`\n]+`|\*\*[^*\n]+\*\*|__[^_\n]+__|\*[^*\n]+\*|_[^_\n]+_)/g).filter(Boolean);
+  return tokens.map((token, index) => {
+    if (token.startsWith("**") && token.endsWith("**")) return <strong key={index}>{token.slice(2, -2)}</strong>;
+    if (token.startsWith("__") && token.endsWith("__")) return <strong key={index}>{token.slice(2, -2)}</strong>;
+    if (token.startsWith("`") && token.endsWith("`")) return <code key={index}>{token.slice(1, -1)}</code>;
+    if ((token.startsWith("*") && token.endsWith("*")) || (token.startsWith("_") && token.endsWith("_"))) return <em key={index}>{token.slice(1, -1)}</em>;
+    return token.replace(/\*{1,3}/g, "");
+  });
+}
+
+function FormattedAssistantAnswer({ value }: { value: string }) {
+  const lines = value.replace(/\r/g, "").split("\n");
+  const blocks: ReactNode[] = [];
+  let index = 0;
+  while (index < lines.length) {
+    const line = lines[index].trim();
+    if (!line) { index += 1; continue; }
+    const heading = line.match(/^(#{1,3})\s+(.+)$/);
+    if (heading) {
+      blocks.push(<h4 key={`heading-${index}`}>{renderAssistantInline(heading[2])}</h4>);
+      index += 1;
+      continue;
+    }
+    if (/^[-*]\s+/.test(line)) {
+      const items: string[] = [];
+      while (index < lines.length && /^[-*]\s+/.test(lines[index].trim())) {
+        items.push(lines[index].trim().replace(/^[-*]\s+/, ""));
+        index += 1;
+      }
+      blocks.push(<ul key={`list-${index}`}>{items.map((item, itemIndex) => <li key={itemIndex}>{renderAssistantInline(item)}</li>)}</ul>);
+      continue;
+    }
+    if (/^\d+[.)]\s+/.test(line)) {
+      const items: string[] = [];
+      while (index < lines.length && /^\d+[.)]\s+/.test(lines[index].trim())) {
+        items.push(lines[index].trim().replace(/^\d+[.)]\s+/, ""));
+        index += 1;
+      }
+      blocks.push(<ol key={`ordered-${index}`}>{items.map((item, itemIndex) => <li key={itemIndex}>{renderAssistantInline(item)}</li>)}</ol>);
+      continue;
+    }
+    const paragraph = [line];
+    index += 1;
+    while (index < lines.length && lines[index].trim() && !/^(#{1,3})\s+|^[-*]\s+|^\d+[.)]\s+/.test(lines[index].trim())) {
+      paragraph.push(lines[index].trim());
+      index += 1;
+    }
+    blocks.push(<p key={`paragraph-${index}`}>{renderAssistantInline(paragraph.join(" "))}</p>);
+  }
+  return <div className="assistant-answer-content">{blocks}</div>;
+}
+type ApiErrorMeta = { verificationRequired?: boolean; previewUrl?: string; accountCreated?: boolean };
+
+class ApiRequestError extends Error {
+  constructor(message: string, public readonly status: number, public readonly meta?: ApiErrorMeta) { super(message); }
+}
+
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
   if (!response.ok) {
-    const payload = await response.json().catch(() => null) as { error?: string } | null;
-    throw new Error(payload?.error ?? `Request failed with ${response.status}`);
+    const payload = await response.json().catch(() => null) as { error?: string; meta?: ApiErrorMeta } | null;
+    throw new ApiRequestError(payload?.error ?? `Request failed with ${response.status}`, response.status, payload?.meta);
   }
   return response.json() as Promise<T>;
 }
@@ -403,7 +462,7 @@ function PlayerProfileView({ profile, loading, error, isFollowed, onBack, onRetr
   </div>;
 }
 
-function SettingsView({ account, authenticated, teams, players, preferences, savingPreferences, theme, section, onSectionChange, onThemeChange, onAccountUpdated, onToggleTeam, onTogglePlayer, onSignIn }: { account: Account; authenticated: boolean; teams: Team[]; players: Player[]; preferences: Preferences; savingPreferences: boolean; theme: ThemeMode; section: SettingsSection; onSectionChange: (section: SettingsSection) => void; onThemeChange: (theme: ThemeMode) => void; onAccountUpdated: (account: Account) => void; onToggleTeam: (teamId: string) => void; onTogglePlayer: (playerId: string) => void; onSignIn: () => void }) {
+function SettingsView({ account, authenticated, teams, players, preferences, savingPreferences, theme, section, onSectionChange, onThemeChange, onAccountUpdated, onSessionEnded, onToggleTeam, onTogglePlayer, onSignIn }: { account: Account; authenticated: boolean; teams: Team[]; players: Player[]; preferences: Preferences; savingPreferences: boolean; theme: ThemeMode; section: SettingsSection; onSectionChange: (section: SettingsSection) => void; onThemeChange: (theme: ThemeMode) => void; onAccountUpdated: (account: Account) => void; onSessionEnded: () => void; onToggleTeam: (teamId: string) => void; onTogglePlayer: (playerId: string) => void; onSignIn: () => void }) {
   const [teamQuery, setTeamQuery] = useState("");
   const [playerQuery, setPlayerQuery] = useState("");
   const [accountSaving, setAccountSaving] = useState(false);
@@ -422,11 +481,12 @@ function SettingsView({ account, authenticated, teams, players, preferences, sav
     setAccountSaving(true);
     setAccountStatus("");
     try {
-      const payload = await fetchJson<{ data: Account; meta: { verificationRequired: boolean; previewUrl?: string } }>("/api/account", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const payload = await fetchJson<{ data: Account; meta: { verificationRequired: boolean; signedOut?: boolean; previewUrl?: string } }>("/api/account", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       onAccountUpdated(payload.data);
       setAccountStatus(payload.meta.verificationRequired ? `${successMessage} Check your email to confirm the change.` : successMessage);
       setVerificationUrl(payload.meta.previewUrl ?? "");
       form?.reset();
+      if (payload.meta.signedOut) onSessionEnded();
     } catch (saveError) {
       setAccountStatus(saveError instanceof Error ? saveError.message : "Could not update your account.");
     } finally { setAccountSaving(false); }
@@ -472,6 +532,9 @@ function CatchUpModal({ brief, onClose }: { brief: CatchUpBrief; onClose: () => 
     if (!moment || !prompt.trim()) return;
     setAsking(true);
     setAssistantError("");
+    setAnswer("");
+    setAssistantMeta("");
+    setCitations([]);
     try {
       const payload = await fetchJson<{ data: { answer: string; citations: CatchUpCitationData[]; provider: "groq" | "local"; webSearchUsed: boolean; fallbackReason?: "not-configured" | "provider-unavailable" } }>("/api/catch-up/assist", {
         method: "POST",
@@ -485,28 +548,27 @@ function CatchUpModal({ brief, onClose }: { brief: CatchUpBrief; onClose: () => 
       setAssistantError(askError instanceof Error ? askError.message : "The assistant is unavailable.");
     } finally { setAsking(false); }
   };
+  const showingAnswer = asking || Boolean(answer);
+  const backToStory = () => {
+    setAnswer("");
+    setAssistantMeta("");
+    setCitations([]);
+    setAssistantError("");
+  };
 
-  const answerParts = (() => {
-    if (citations.length === 0) return answer;
-    const markers = citations.map((citation, index) => ({ ...citation, index })).filter((citation) => citation.endIndex >= 0 && citation.endIndex <= answer.length).sort((left, right) => left.endIndex - right.endIndex);
-    const parts: ReactNode[] = [];
-    let cursor = 0;
-    for (const citation of markers) {
-      if (citation.endIndex < cursor) continue;
-      parts.push(answer.slice(cursor, citation.endIndex));
-      const url = safeExternalUrl(citation.url);
-      if (url) parts.push(<a className="inline-citation" href={url} target="_blank" rel="noreferrer" key={`${url}-${citation.index}`} aria-label={`Source ${citation.index + 1}: ${citation.title}`}>[{citation.index + 1}]</a>);
-      cursor = citation.endIndex;
-    }
-    parts.push(answer.slice(cursor));
-    return parts;
-  })();
-
-  return <div className="modal-backdrop" onClick={onClose}><section className="catch-up-modal" role="dialog" aria-modal="true" aria-labelledby="catch-up-title" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={onClose} aria-label="Close catch-up">×</button><div className="catch-up-header"><p className="overline">YOUR {brief.readTimeMinutes}-MINUTE CATCH-UP</p><h2 id="catch-up-title">{brief.title}</h2><p className="modal-lede">{brief.lede}</p><div className="catch-up-source"><i />{brief.source === "play-by-play" ? "Built from live play-by-play" : "Built from the latest NBA coverage"}</div></div>{brief.game && <div className="recap-stat-row"><div><strong>{brief.game.awayScore ?? "—"}–{brief.game.homeScore ?? "—"}</strong><span>{brief.game.away.short} at {brief.game.home.short}</span></div><div><strong>{brief.game.status === "live" ? (brief.game.period && brief.game.period > 4 ? `OT${brief.game.period - 4}` : `Q${brief.game.period ?? "—"}`) : "FINAL"}</strong><span>{brief.game.status === "live" ? brief.game.clock ?? "Live" : "Game status"}</span></div><div><strong>{brief.moments.length}</strong><span>Key updates</span></div></div>}<div className="catch-up-workspace"><div className="catch-up-reader">{moment ? <article className="catch-up-slide"><div className="slide-progress"><span>STORY {slide + 1} OF {brief.moments.length}</span><div>{brief.moments.map((item, index) => <button key={item.id} className={index === slide ? "active" : ""} onClick={() => moveTo(index)} aria-label={`Open story ${index + 1}`} />)}</div></div><p className="slide-reason">{moment.reason}</p><h3>{moment.title}</h3>{moment.context && <p className="slide-context">{moment.context}</p>}<p className="slide-detail">{moment.detail}</p><div className="slide-importance"><span>Importance</span><b>{moment.importanceScore}/100</b></div></article> : <div className="catch-up-empty">There are no significant updates yet.</div>}<div className="catch-up-navigation"><button onClick={() => moveTo(slide - 1)} disabled={slide === 0}>← Previous</button><button onClick={slide === brief.moments.length - 1 ? onClose : () => moveTo(slide + 1)}>{slide === brief.moments.length - 1 ? "Back to my feed" : "Next story →"}</button></div></div><aside className="catch-up-assistant"><p className="overline">ASK ABOUT THIS STORY</p><h3>Sports Watch assistant</h3><p>Summaries use the recap. Freshness questions search trusted NBA sources and include citations.</p><div className="assistant-prompts">{["Summarize this in one sentence", "Why does this matter?", "What should I watch next?", "Find the latest update"].map((prompt) => <button key={prompt} disabled={!moment || asking} onClick={() => { setQuestion(prompt); void ask(prompt); }}>{prompt}</button>)}</div><form onSubmit={(event) => { event.preventDefault(); void ask(question); }}><label htmlFor="catch-up-question">Your question</label><textarea id="catch-up-question" value={question} onChange={(event) => setQuestion(event.target.value)} maxLength={500} placeholder="Ask about this update…" /><button disabled={!question.trim() || !moment || asking}>{asking ? "Thinking…" : "Ask assistant"}</button></form>{assistantError && <p className="assistant-error" role="alert">{assistantError}</p>}{answer && <div className="assistant-answer" aria-live="polite"><strong>Answer</strong><p>{answerParts}</p><small>{assistantMeta}</small>{citations.length > 0 && <div className="assistant-sources"><b>Sources</b><ol>{citations.map((citation, index) => { const url = safeExternalUrl(citation.url); return url ? <li key={url}><a href={url} target="_blank" rel="noreferrer"><span>{index + 1}</span>{citation.title}</a></li> : null; })}</ol></div>}</div>}</aside></div></section></div>;
+  return <div className="modal-backdrop" onClick={onClose}><section className="catch-up-modal" role="dialog" aria-modal="true" aria-labelledby="catch-up-title" onClick={(event) => event.stopPropagation()}>
+    <button className="modal-close" onClick={onClose} aria-label="Close catch-up">×</button>
+    <div className="catch-up-header"><p className="overline">YOUR {brief.readTimeMinutes}-MINUTE CATCH-UP</p><h2 id="catch-up-title">{brief.title}</h2><p className="modal-lede">{brief.lede}</p><div className="catch-up-source"><i />{brief.source === "play-by-play" ? "Built from live play-by-play" : "Built from the latest NBA coverage"}</div></div>
+    {brief.game && <div className="recap-stat-row"><div><strong>{brief.game.awayScore ?? "—"}–{brief.game.homeScore ?? "—"}</strong><span>{brief.game.away.short} at {brief.game.home.short}</span></div><div><strong>{brief.game.status === "live" ? (brief.game.period && brief.game.period > 4 ? `OT${brief.game.period - 4}` : `Q${brief.game.period ?? "—"}`) : "FINAL"}</strong><span>{brief.game.status === "live" ? brief.game.clock ?? "Live" : "Game status"}</span></div><div><strong>{brief.moments.length}</strong><span>Key updates</span></div></div>}
+    <div className="catch-up-workspace"><div className="catch-up-reader">
+      {showingAnswer ? <article className="catch-up-slide assistant-answer-slide" aria-live="polite"><button className="assistant-answer-back" onClick={backToStory} disabled={asking}>← Back to story {slide + 1}</button>{asking ? <div className="assistant-answer-loading"><span className="live-loader" /><strong>Sports Watch is thinking…</strong><small>Building an answer from this story&apos;s context.</small></div> : <><p className="slide-reason">SPORTS WATCH ASSISTANT</p><h3>Answer</h3><FormattedAssistantAnswer value={answer} /><small className="assistant-answer-meta">{assistantMeta}</small>{citations.length > 0 && <div className="assistant-sources"><b>Sources</b><ol>{citations.map((citation, index) => { const url = safeExternalUrl(citation.url); return url ? <li key={url}><a href={url} target="_blank" rel="noreferrer"><span>{index + 1}</span>{citation.title}</a></li> : null; })}</ol></div>}</>}</article> : moment ? <article className="catch-up-slide"><div className="slide-progress"><span>STORY {slide + 1} OF {brief.moments.length}</span><div>{brief.moments.map((item, index) => <button key={item.id} className={index === slide ? "active" : ""} onClick={() => moveTo(index)} aria-label={`Open story ${index + 1}`} />)}</div></div><p className="slide-reason">{moment.reason}</p><h3>{moment.title}</h3>{moment.context && <p className="slide-context">{moment.context}</p>}<p className="slide-detail">{moment.detail}</p><div className="slide-importance"><span>Importance</span><b>{moment.importanceScore}/100</b></div></article> : <div className="catch-up-empty">There are no significant updates yet.</div>}
+      {!showingAnswer && <div className="catch-up-navigation"><button onClick={() => moveTo(slide - 1)} disabled={slide === 0}>← Previous</button><button onClick={slide === brief.moments.length - 1 ? onClose : () => moveTo(slide + 1)}>{slide === brief.moments.length - 1 ? "Back to my feed" : "Next story →"}</button></div>}
+    </div><aside className="catch-up-assistant"><p className="overline">ASK ABOUT THIS STORY</p><h3>Sports Watch assistant</h3><p>Summaries use the recap. Freshness questions search trusted NBA sources and include citations.</p><div className="assistant-prompts">{["Summarize this in one sentence", "Why does this matter?", "What should I watch next?", "Find the latest update"].map((prompt) => <button key={prompt} disabled={!moment || asking} onClick={() => { setQuestion(prompt); void ask(prompt); }}>{prompt}</button>)}</div><form onSubmit={(event) => { event.preventDefault(); void ask(question); }}><label htmlFor="catch-up-question">Your question</label><textarea id="catch-up-question" value={question} onChange={(event) => setQuestion(event.target.value)} maxLength={500} placeholder="Ask about this update…" /><button disabled={!question.trim() || !moment || asking}>{asking ? "Thinking…" : "Ask assistant"}</button></form>{assistantError && <p className="assistant-error" role="alert">{assistantError}</p>}</aside></div>
+  </section></div>;
 }
 
 function AuthModal({ onClose }: { onClose: () => void }) {
-  const [mode, setMode] = useState<"login" | "register">("login");
+  const [mode, setMode] = useState<"login" | "register" | "forgot">("login");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState<{ message: string; previewUrl?: string } | null>(null);
@@ -518,24 +580,67 @@ function AuthModal({ onClose }: { onClose: () => void }) {
     const form = new FormData(event.currentTarget);
     const body = mode === "register"
       ? { displayName: form.get("displayName"), email: form.get("email"), password: form.get("password"), timezone: Intl.DateTimeFormat().resolvedOptions().timeZone }
-      : { email: form.get("email"), password: form.get("password") };
+      : mode === "forgot" ? { email: form.get("email") } : { email: form.get("email"), password: form.get("password") };
     try {
-      const payload = await fetchJson<{ meta?: { verificationRequired?: boolean; previewUrl?: string } }>(`/api/auth/${mode === "register" ? "register" : "login"}`, {
+      const endpoint = mode === "register" ? "register" : mode === "forgot" ? "forgot-password" : "login";
+      const payload = await fetchJson<{ meta?: { verificationRequired?: boolean; previewUrl?: string; message?: string } }>(`/api/auth/${endpoint}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      if (mode === "register" && payload.meta?.verificationRequired) {
+      if (mode === "forgot") {
+        setSuccess({ message: payload.meta?.message ?? "If an account exists for that email, a password reset link has been sent.", previewUrl: payload.meta?.previewUrl });
+        setSubmitting(false);
+      } else if (mode === "register" && payload.meta?.verificationRequired) {
         setSuccess({ message: "Account created. Check your email and open the verification link before signing in.", previewUrl: payload.meta.previewUrl });
         setSubmitting(false);
       } else window.location.reload();
     } catch (submitError) {
+      if (submitError instanceof ApiRequestError && submitError.meta?.verificationRequired) {
+        setSuccess({
+          message: submitError.meta.accountCreated
+            ? "Your account was created, but the verification message could not be delivered. Try signing in with the same password to generate a new verification link."
+            : "Your account still needs email verification. Open the verification link before signing in.",
+          previewUrl: submitError.meta.previewUrl,
+        });
+        setSubmitting(false);
+        return;
+      }
       setError(submitError instanceof Error ? submitError.message : "Authentication failed.");
       setSubmitting(false);
     }
   };
 
-  return <div className="modal-backdrop" onClick={onClose}><section className="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-title" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={onClose} aria-label="Close">×</button><div className="auth-brand"><span className="brand-dot" />Sports Watch</div><p className="overline">YOUR NBA, SAVED</p><h2 id="auth-title">{success ? "Check your email" : mode === "login" ? "Welcome back" : "Create your account"}</h2>{success ? <div className="auth-success" role="status"><span>✓</span><p>{success.message}</p>{success.previewUrl && <a href={success.previewUrl}>Open local verification link</a>}<button onClick={onClose}>Continue exploring</button></div> : <><p className="auth-copy">{mode === "login" ? "Sign in to load your teams, players, alerts, and personal feed." : "Save your favorites and get a personal NBA feed on every visit."}</p><form className="auth-form" onSubmit={submit}>{mode === "register" && <label>Display name<input name="displayName" autoComplete="name" minLength={2} maxLength={50} required placeholder="Isaac" /></label>}<label>Email<input name="email" type="email" autoComplete="email" required placeholder="you@example.com" /></label><label>Password<input name="password" type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} minLength={8} maxLength={128} required placeholder="At least 8 characters" /></label>{error && <p className="auth-error" role="alert">{error}</p>}<button className="auth-submit" disabled={submitting}>{submitting ? "Please wait…" : mode === "login" ? "Sign in" : "Create account"}<span>→</span></button></form><button className="auth-switch" onClick={() => { setMode((current) => current === "login" ? "register" : "login"); setError(""); }}>{mode === "login" ? "New to Sports Watch? Create an account" : "Already have an account? Sign in"}</button><p className="auth-demo">You can close this window to keep exploring in shared demo mode.</p></>}</section></div>;
+  const changeMode = (nextMode: "login" | "register" | "forgot") => { setMode(nextMode); setError(""); setSuccess(null); };
+  return <div className="modal-backdrop" onClick={onClose}><section className="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-title" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={onClose} aria-label="Close">×</button><div className="auth-brand"><span className="brand-dot" />Sports Watch</div><p className="overline">YOUR NBA, SAVED</p><h2 id="auth-title">{success ? "Check your email" : mode === "login" ? "Welcome back" : mode === "register" ? "Create your account" : "Reset your password"}</h2>{success ? <div className="auth-success" role="status"><span>✓</span><p>{success.message}</p>{success.previewUrl && <a href={success.previewUrl}>{mode === "forgot" ? "Open local reset link" : "Open local verification link"}</a>}<button onClick={onClose}>Continue exploring</button></div> : <><p className="auth-copy">{mode === "login" ? "Sign in to load your teams, players, alerts, and personal feed." : mode === "register" ? "Save your favorites and get a personal NBA feed on every visit." : "Enter your account email and we’ll send you a secure, one-time reset link."}</p><form className="auth-form" onSubmit={submit}>{mode === "register" && <label>Display name<input name="displayName" autoComplete="name" minLength={2} maxLength={50} required placeholder="Isaac" /></label>}<label>Email<input name="email" type="email" autoComplete="email" required placeholder="you@example.com" /></label>{mode !== "forgot" && <label>Password<input name="password" type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} minLength={8} maxLength={128} required placeholder="At least 8 characters" /></label>}{error && <p className="auth-error" role="alert">{error}</p>}<button className="auth-submit" disabled={submitting}>{submitting ? "Please wait…" : mode === "login" ? "Sign in" : mode === "register" ? "Create account" : "Send reset link"}<span>→</span></button></form><div className="auth-links">{mode === "login" && <button className="auth-switch" onClick={() => changeMode("forgot")}>Forgot password?</button>}<button className="auth-switch" onClick={() => changeMode(mode === "login" ? "register" : "login")}>{mode === "login" ? "New to Sports Watch? Create an account" : mode === "register" ? "Already have an account? Sign in" : "Back to sign in"}</button></div><p className="auth-demo">You can close this window to keep exploring in shared demo mode.</p></>}</section></div>;
+}
+
+function ResetPasswordModal({ token, onClose, onComplete }: { token: string; onClose: () => void; onComplete: () => void }) {
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const [complete, setComplete] = useState(false);
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setError("");
+    const form = new FormData(event.currentTarget);
+    const newPassword = String(form.get("newPassword") ?? "");
+    const confirmPassword = String(form.get("confirmPassword") ?? "");
+    if (newPassword !== confirmPassword) { setError("The new passwords do not match."); return; }
+    setSubmitting(true);
+    try {
+      await fetchJson("/api/auth/reset-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, newPassword, confirmPassword }),
+      });
+      setComplete(true);
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "Password reset failed.");
+    } finally { setSubmitting(false); }
+  };
+
+  return <div className="modal-backdrop" onClick={onClose}><section className="auth-modal" role="dialog" aria-modal="true" aria-labelledby="reset-password-title" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={onClose} aria-label="Close">×</button><div className="auth-brand"><span className="brand-dot" />Sports Watch</div><p className="overline">SECURE ACCOUNT RECOVERY</p><h2 id="reset-password-title">{complete ? "Password changed" : "Choose a new password"}</h2>{complete ? <div className="auth-success" role="status"><span>✓</span><p>Your password has been updated. For your security, existing sessions were signed out.</p><button onClick={onComplete}>Sign in with new password</button></div> : <><p className="auth-copy">Enter and confirm your new password. This reset link can only be used once.</p><form className="auth-form" onSubmit={submit}><label>New password<input name="newPassword" type="password" autoComplete="new-password" minLength={8} maxLength={128} required placeholder="At least 8 characters" /></label><label>Confirm new password<input name="confirmPassword" type="password" autoComplete="new-password" minLength={8} maxLength={128} required placeholder="Enter it again" /></label>{error && <p className="auth-error" role="alert">{error}</p>}<button className="auth-submit" disabled={submitting}>{submitting ? "Changing password…" : "Change password"}<span>→</span></button></form></>}</section></div>;
 }
 
 function OnboardingModal({ teams, players, recommendedTeamIds, recommendedPlayerIds, initialPreferences }: { teams: Team[]; players: Player[]; recommendedTeamIds: string[]; recommendedPlayerIds: string[]; initialPreferences: Preferences }) {
@@ -592,6 +697,7 @@ function SportsWatchApp() {
   const [theme, setTheme] = useState<ThemeMode>(() => window.localStorage.getItem("sports-watch-theme") === "light" ? "light" : "dark");
   const [authenticated, setAuthenticated] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
+  const [passwordResetToken, setPasswordResetToken] = useState("");
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [preferences, setPreferences] = useState<Preferences>({ followedTeamIds: ["gsw"], followedPlayerIds: ["stephen-curry"], alerts: { gameStarting: true, closeGame: true, finalScore: true, standoutPerformance: false, injuryUpdate: true, leadChange: true, milestone: false } });
   const [feedItems, setFeedItems] = useState<FeedItem[]>([]);
@@ -611,7 +717,7 @@ function SportsWatchApp() {
   const [activeNav, setActiveNav] = useState("Home");
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("account");
   const [catchUpOpen, setCatchUpOpen] = useState(false);
-  const [catchUpLoading, setCatchUpLoading] = useState(false);
+  const [catchUpLoading, setCatchUpLoading] = useState(true);
   const [scheduleView, setScheduleView] = useState<ScheduleView>("month");
   const [selectedMonthIndex, setSelectedMonthIndex] = useState(0);
   const [selectedDate, setSelectedDate] = useState(toDateKey(today));
@@ -649,11 +755,17 @@ function SportsWatchApp() {
   useEffect(() => {
     const url = new URL(window.location.href);
     const status = url.searchParams.get("verification");
+    const sessionStatus = url.searchParams.get("session");
+    const resetToken = url.searchParams.get("reset-password")?.trim() ?? "";
+    if (resetToken) setPasswordResetToken(resetToken);
     if (status === "account") setVerificationNotice("Email verified. Your Sports Watch account is ready.");
     else if (status === "password") setVerificationNotice("Password change confirmed. Your email is verified again.");
     else if (status === "invalid") setVerificationNotice("That verification link is invalid or has expired.");
-    if (status) {
+    else if (sessionStatus === "password-changed") setVerificationNotice("Password updated. Check your email, then sign in again on this device.");
+    if (status || sessionStatus || resetToken) {
       url.searchParams.delete("verification");
+      url.searchParams.delete("session");
+      url.searchParams.delete("reset-password");
       window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
     }
   }, []);
@@ -672,10 +784,9 @@ function SportsWatchApp() {
       fetchJson<{ data: FeedItem[] }>("/api/feed"),
       fetchJson<{ data: { teams: Team[]; players: Player[] } }>("/api/catalog"),
       fetchJson<{ data: DiscoveryRecommendations }>("/api/recommendations/discovery"),
-      fetchJson<{ data: CatchUpBrief }>("/api/catch-up"),
-      fetchJson<{ data: DeliveredAlert[] }>("/api/alerts", { method: "POST" }).then(() => fetchJson<{ data: DeliveredAlert[] }>("/api/alerts")),
+      fetchJson<{ data: DeliveredAlert[] }>("/api/alerts"),
       fetchJson<{ data: SavedArticleData[] }>("/api/saved/articles").catch(() => ({ data: [] })),
-    ]).then(([gamesPayload, accountPayload, preferencesPayload, feedPayload, catalogPayload, discoveryPayload, catchUpPayload, alertsPayload, savedPayload]) => {
+    ]).then(([gamesPayload, accountPayload, preferencesPayload, feedPayload, catalogPayload, discoveryPayload, alertsPayload, savedPayload]) => {
       if (!mounted) return;
       const loadedAccount = accountPayload.meta.authenticated ? accountPayload.data : { ...accountPayload.data, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || accountPayload.data.timezone };
       setSchedule(gamesPayload.data.map((game) => mapApiGame(game, loadedAccount.timezone)));
@@ -687,7 +798,6 @@ function SportsWatchApp() {
       setTeams(catalogPayload.data.teams);
       setPlayers(catalogPayload.data.players);
       setDiscovery(discoveryPayload.data);
-      setCatchUpBrief(catchUpPayload.data);
       setNotifications(alertsPayload.data);
       setSavedArticles(savedPayload.data);
     }).catch(() => {
@@ -696,6 +806,36 @@ function SportsWatchApp() {
       if (mounted) setPersonalizationLoading(false);
     });
     return () => { mounted = false; };
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    let retryTimer: number | undefined;
+    let syncRequested = false;
+    let attempts = 0;
+    const loadReadyBrief = async () => {
+      try {
+        const payload = await fetchJson<{ data: CatchUpBrief; meta: { ready?: boolean } }>("/api/catch-up", { cache: "no-store" });
+        if (!mounted) return;
+        if (payload.meta.ready !== false) {
+          setCatchUpBrief(payload.data);
+          setCatchUpLoading(false);
+          return;
+        }
+        if (!syncRequested) {
+          syncRequested = true;
+          await fetchJson("/api/feed", { method: "POST", cache: "no-store" }).catch(() => null);
+          if (!mounted) return;
+        }
+      } catch { /* keep the control unavailable and retry */ }
+      attempts += 1;
+      if (mounted) retryTimer = window.setTimeout(loadReadyBrief, attempts < 10 ? 1_500 : 10_000);
+    };
+    void loadReadyBrief();
+    return () => {
+      mounted = false;
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+    };
   }, []);
 
   useEffect(() => {
@@ -749,6 +889,11 @@ function SportsWatchApp() {
   }, [selectedGameId, gameCenterRefreshKey, account.timezone]);
 
   const persistPreferences = async (next: Preferences) => {
+    if (!authenticated) {
+      setPreferenceStatus("Sign in to save teams, players, and alert preferences.");
+      setAuthOpen(true);
+      return;
+    }
     const previous = preferences;
     setPreferences(next);
     setPreferencesSaving(true);
@@ -763,14 +908,14 @@ function SportsWatchApp() {
       const [feedPayload, discoveryPayload, catchUpPayload, alertsPayload] = await Promise.all([
         fetchJson<{ data: FeedItem[] }>("/api/feed"),
         fetchJson<{ data: DiscoveryRecommendations }>("/api/recommendations/discovery"),
-        fetchJson<{ data: CatchUpBrief }>("/api/catch-up"),
-        fetchJson<{ data: DeliveredAlert[] }>("/api/alerts", { method: "POST" }).then(() => fetchJson<{ data: DeliveredAlert[] }>("/api/alerts")),
+        fetchJson<{ data: CatchUpBrief; meta: { ready?: boolean } }>("/api/catch-up"),
+        fetchJson<{ data: DeliveredAlert[] }>("/api/alerts"),
       ]);
       setFeedItems(newestFeedFirst(feedPayload.data));
       setLastFeedRefreshAt(Date.now());
       setFeedFreshnessStatus("");
       setDiscovery(discoveryPayload.data);
-      setCatchUpBrief(catchUpPayload.data);
+      if (catchUpPayload.meta.ready !== false) setCatchUpBrief(catchUpPayload.data);
       setNotifications(alertsPayload.data);
       setPreferenceStatus("Saved — your feed has been refreshed.");
     } catch {
@@ -812,6 +957,10 @@ function SportsWatchApp() {
     }
   };
   const markAllNotificationsRead = async () => {
+    if (!authenticated) {
+      setAuthOpen(true);
+      return;
+    }
     await fetchJson("/api/alerts", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ all: true }) });
     setNotifications((current) => current.map((notification) => ({ ...notification, read: true, readAt: notification.readAt ?? new Date().toISOString() })));
   };
@@ -910,6 +1059,11 @@ function SportsWatchApp() {
     }
   };
   const removeSavedStory = async (articleId: string) => {
+    if (!authenticated) {
+      setSavedArticlesError("Sign in to manage saved stories.");
+      setAuthOpen(true);
+      return;
+    }
     setSavingArticleId(articleId);
     setSavedArticlesError("");
     try {
@@ -923,6 +1077,11 @@ function SportsWatchApp() {
   };
   const toggleArticleSave = async () => {
     if (!articleDetail) return;
+    if (!authenticated) {
+      setArticleError("Sign in to save stories.");
+      setAuthOpen(true);
+      return;
+    }
     const articleId = articleDetail.id;
     if (savedArticles.some((article) => article.id === articleId)) {
       await removeSavedStory(articleId);
@@ -958,7 +1117,8 @@ function SportsWatchApp() {
   const openCatchUp = async (gameId?: string) => {
     setCatchUpLoading(true);
     try {
-      const payload = await fetchJson<{ data: CatchUpBrief }>(gameId ? `/api/catch-up?gameId=${encodeURIComponent(gameId)}` : "/api/catch-up");
+      const payload = await fetchJson<{ data: CatchUpBrief; meta: { ready?: boolean } }>(gameId ? `/api/catch-up?gameId=${encodeURIComponent(gameId)}` : "/api/catch-up");
+      if (payload.meta.ready === false) return;
       setCatchUpBrief(payload.data);
       setCatchUpOpen(true);
     } catch (catchUpError) {
@@ -983,7 +1143,7 @@ function SportsWatchApp() {
       <nav className="mobile-nav" aria-label="Mobile navigation">{[["Home", "⌂"], ["Schedule", "▦"], ["Live games", "◉"], ["My teams", "◈"], ["My players", "♙"], ["Saved", "◇"], ["Settings", "⚙"]].map(([item, icon]) => <button className={activeNav === item || (item === "My teams" && activeNav === "Team profile") || (item === "My players" && activeNav === "Player profile") || (item === "Saved" && activeNav === "Article" && articleBackNav === "Saved") ? "active" : ""} onClick={() => { if (item === "Settings") setSettingsSection("account"); setActiveNav(item); }} key={item}><span>{icon}</span>{item === "Live games" ? "Live" : item === "My teams" ? "Teams" : item === "My players" ? "Players" : item}</button>)}</nav>
 
       {activeNav === "Home" ? <>
-        <div className="welcome-row"><div><p className="overline">YOUR NBA, IN FOCUS</p><h1>{greetingForTimeZone(account.timezone, currentTime)}, {account.displayName.split(" ")[0]} <span>✦</span></h1><p className="subhead">Here&apos;s what matters across the teams and players you follow.</p></div><button className="catch-up-button" onClick={() => void openCatchUp()} disabled={!catchUpBrief || catchUpLoading}><span>✦</span><span><strong>{catchUpLoading ? "Building recap…" : "Catch me up"}</strong><small>{catchUpBrief?.readTimeMinutes ?? 1} min read</small></span><b>→</b></button></div>
+        <div className="welcome-row"><div><p className="overline">YOUR NBA, IN FOCUS</p><h1>{greetingForTimeZone(account.timezone, currentTime)}, {account.displayName.split(" ")[0]} <span>✦</span></h1><p className="subhead">Here&apos;s what matters across the teams and players you follow.</p></div><button className="catch-up-button" onClick={() => void openCatchUp()} disabled={!catchUpBrief || catchUpLoading}><span className={catchUpLoading ? "catch-up-loading-icon" : ""}>✦</span><span><strong>{catchUpLoading || !catchUpBrief ? "Loading catch-up…" : "Catch me up"}</strong><small>{catchUpLoading || !catchUpBrief ? "Syncing latest NBA updates" : `${catchUpBrief.readTimeMinutes} min read`}</small></span><b>→</b></button></div>
         <div className="dashboard-grid"><div className="feed-column"><div className="section-heading feed-heading"><div><h2>{hasPersonalization ? "Your feed" : "Popular right now"}</h2><p className="feed-subtitle">{hasPersonalization ? "Ranked for your current favorites" : "League-wide stories to get you started"}</p>{feedRefreshStatus && <p className="feed-refresh-status" aria-live="polite">{feedRefreshStatus}</p>}{feedFreshnessStatus && <p className="feed-freshness-status" aria-live="polite">{feedFreshnessStatus}</p>}</div><div className="feed-heading-actions"><span className="feed-count">{feedItems.length} updates</span><button className="feed-refresh-button" disabled={feedRefreshing || personalizationLoading} onClick={() => void refreshFeed()}><span className={feedRefreshing ? "refresh-icon spinning" : "refresh-icon"}>↻</span>{feedRefreshing ? "Checking…" : "Refresh"}</button></div></div><div className="feed-list" tabIndex={0} aria-label={hasPersonalization ? "Your personalized news feed" : "Popular NBA news feed"}>{personalizationLoading ? <div className="feed-state">Building your personalized feed…</div> : feedItems.length === 0 ? <div className="feed-state"><strong>No current NBA stories are available.</strong><span>Fresh updates will appear here after the next data sync.</span><button onClick={() => setActiveNav("My teams")}>Choose favorites</button></div> : feedItems.map((item) => <article className={`feed-card ${item.accent}`} key={item.id}><div className="feed-icon">{item.kind === "performance" ? "◉" : item.kind === "injury" ? "!" : "✦"}</div><div className="feed-content"><div className="feed-card-top"><p className="card-eyebrow">{item.eyebrow} · {formatRelativeTime(item.publishedAt)}</p><span className="relevance-score">{item.relevanceScore}% {hasPersonalization ? "match" : "popular"}</span></div><h3>{item.title}</h3><p className="card-body">{item.body}</p><div className="feed-meta"><span>{item.reason}</span><button onClick={() => void openArticle(item.id, "Home")}>Read story <span>→</span></button></div></div></article>)}</div></div>
           <div className="right-column">
             {featuredLiveGame ? <LiveGameCard game={featuredLiveGame} onOpen={() => openGameCenter(featuredLiveGame.id)} /> : <section className="section-card"><div className="mini-empty">There are no live games right now.</div></section>}
@@ -1006,13 +1166,14 @@ function SportsWatchApp() {
           <div className="preference-block"><div className="section-heading"><div><h2>Your players</h2><p className="panel-copy">Players you follow and use to personalize your experience.</p></div><span className="count-badge">{followedPlayers.length} followed</span></div><div className="preference-list">{followedPlayers.length > 0 ? followedPlayers.map((player) => <div className="preference-row selected player-preference-row" key={player.id}><button className="player-row-profile" onClick={() => void openPlayerProfile(player.id)}><PlayerAvatar player={player} className="preference-avatar" /><span><strong>{player.name}</strong><small>{player.teamName} · {player.position}</small></span></button><button className="row-follow-action" disabled={preferencesSaving} onClick={() => togglePlayer(player.id)}>Unfollow</button></div>) : <div className="discovery-empty">You are not following any players yet. Add one from the recommendations.</div>}</div></div>
           <div className="preference-block recommendation-block"><div className="section-heading"><div><h2>{hasPersonalization ? "Players you may like" : "Popular players"}</h2><p className="panel-copy">{hasPersonalization ? "Personalized candidates first, then popular players to fill up to eight spots." : "Trending across recent NBA updates and high-visibility matchups."}</p></div><span className="count-badge">{playerSearchActive ? `${playerSearchMatches.length} result${playerSearchMatches.length === 1 ? "" : "s"}` : `${discovery.players.length}/8`}</span></div><EntitySearch value={playerSearch} onChange={setPlayerSearch} label="Search NBA players" placeholder="Search all players by name, team, or position" /><div className="preference-list">{visiblePlayerSuggestions.length > 0 ? visiblePlayerSuggestions.map(({ player, score, reason }) => { const followed = preferences.followedPlayerIds.includes(player.id); return <div className="recommendation-row player-recommendation-row" key={player.id}><button className="recommendation-profile" onClick={() => void openPlayerProfile(player.id)}><PlayerAvatar player={player} className="preference-avatar" /><span><strong>{player.name}</strong><small>{reason}</small></span></button>{score !== null && <span className="recommendation-score">{score}%</span>}<button className={followed ? "following-result" : ""} disabled={preferencesSaving || followed} onClick={() => togglePlayer(player.id)}>{followed ? "Following" : "Follow"}</button></div>; }) : <div className="discovery-empty">{playerSearchActive ? `No players match “${playerSearch}”.` : "You already follow every available player recommendation."}</div>}</div></div>
         </section>
-      </> : activeNav === "Settings" ? <SettingsView account={account} authenticated={authenticated} teams={teams} players={players} preferences={preferences} savingPreferences={preferencesSaving} theme={theme} section={settingsSection} onSectionChange={setSettingsSection} onThemeChange={setTheme} onAccountUpdated={setAccount} onToggleTeam={toggleTeam} onTogglePlayer={togglePlayer} onSignIn={() => setAuthOpen(true)} /> : <>
+      </> : activeNav === "Settings" ? <SettingsView account={account} authenticated={authenticated} teams={teams} players={players} preferences={preferences} savingPreferences={preferencesSaving} theme={theme} section={settingsSection} onSectionChange={setSettingsSection} onThemeChange={setTheme} onAccountUpdated={setAccount} onSessionEnded={() => window.location.assign("/?session=password-changed")} onToggleTeam={toggleTeam} onTogglePlayer={togglePlayer} onSignIn={() => setAuthOpen(true)} /> : <>
         <div className="page-heading"><p className="overline">GAME CENTER</p><h1>Live games</h1><p className="subhead">Follow scores, every play, and the moments changing the game.</p></div>{liveGames.length > 0 ? <section className="live-games-grid">{liveGames.map((game) => <LiveGameCard game={game} key={game.id} onOpen={() => openGameCenter(game.id)} />)}</section> : !selectedGameId && <section className="feed-state"><strong>No games are live right now.</strong><span>Upcoming games are still available in your schedule.</span><button onClick={() => setActiveNav("Schedule")}>View schedule</button></section>}{selectedGameId && <GameCenterPanel center={gameCenter} loading={gameCenterLoading} refreshing={gameCenterRefreshing} catchUpLoading={catchUpLoading} error={gameCenterError} onClose={closeGameCenter} onRetry={() => setGameCenterRefreshKey((key) => key + 1)} onCatchUp={() => void openCatchUp(selectedGameId)} />}
       </>}
     </section>
 
     {catchUpOpen && catchUpBrief && <CatchUpModal key={catchUpBrief.generatedAt} brief={catchUpBrief} onClose={() => setCatchUpOpen(false)} />}
     {authOpen && <AuthModal onClose={() => setAuthOpen(false)} />}
+    {passwordResetToken && <ResetPasswordModal token={passwordResetToken} onClose={() => setPasswordResetToken("")} onComplete={() => { setPasswordResetToken(""); setAuthOpen(true); }} />}
     {onboardingOpen && <OnboardingModal teams={teams} players={players} recommendedTeamIds={discovery.teams.map(({ team }) => team.id)} recommendedPlayerIds={discovery.players.map(({ player }) => player.id)} initialPreferences={preferences} />}
   </main></TimeZoneContext.Provider>;
 }

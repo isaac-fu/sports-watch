@@ -9,7 +9,7 @@ const sessionLifetimeMs = 30 * 24 * 60 * 60 * 1000;
 
 type MemoryCredential = { account: Account; passwordHash: string };
 type MemorySession = { accountId: string; expiresAt: number };
-type VerificationPurpose = "signup" | "password-change";
+type VerificationPurpose = "signup" | "password-change" | "password-reset";
 type MemoryVerification = { accountId: string; purpose: VerificationPurpose; expiresAt: number };
 type AuthMemory = { credentials: Map<string, MemoryCredential>; sessions: Map<string, MemorySession>; verifications: Map<string, MemoryVerification>; completedOnboarding: Set<string> };
 
@@ -174,6 +174,7 @@ export async function updateAccountSettings(accountId: string, input: { displayN
         WHERE id=$1
         RETURNING id, display_name, email, timezone, created_at, email_verified_at
       `, [accountId, displayName || null, passwordHash, timezone || null]);
+      if (input.newPassword) await client.query("DELETE FROM auth_sessions WHERE account_id=$1", [accountId]);
       await client.query("COMMIT");
       return accountFromRow(result.rows[0]);
     } catch (error) {
@@ -190,6 +191,9 @@ export async function updateAccountSettings(accountId: string, input: { displayN
   }
   const account = { ...credential.account, displayName: displayName || credential.account.displayName, timezone: timezone || credential.account.timezone, emailVerified: input.newPassword ? false : credential.account.emailVerified };
   memory.credentials.set(email, { account, passwordHash: passwordHash ?? credential.passwordHash });
+  if (input.newPassword) {
+    for (const [tokenHash, session] of Array.from(memory.sessions.entries())) if (session.accountId === accountId) memory.sessions.delete(tokenHash);
+  }
   return account;
 }
 
@@ -209,20 +213,22 @@ export async function createSession(accountId: string) {
 export async function createEmailVerification(accountId: string, purpose: VerificationPurpose) {
   const token = randomBytes(32).toString("base64url");
   const tokenHash = hashToken(token);
-  const ttl = Math.max(60_000, Number(process.env.EMAIL_VERIFICATION_TTL_MS) || 24 * 60 * 60 * 1000);
+  const configuredTtl = purpose === "password-reset" ? process.env.PASSWORD_RESET_TTL_MS : process.env.EMAIL_VERIFICATION_TTL_MS;
+  const defaultTtl = purpose === "password-reset" ? 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
+  const ttl = Math.max(60_000, Number(configuredTtl) || defaultTtl);
   const expiresAt = new Date(Date.now() + ttl);
   const pool = getDbPool();
   if (pool) {
     await ensureAuthTables();
     const result = await pool.query("SELECT id, display_name, email, timezone, created_at, email_verified_at FROM accounts WHERE id=$1", [accountId]);
     if (!result.rows[0]) throw new Error("Account not found.");
-    await pool.query("DELETE FROM email_verification_tokens WHERE account_id=$1 AND consumed_at IS NULL", [accountId]);
+    await pool.query("DELETE FROM email_verification_tokens WHERE account_id=$1 AND purpose=$2 AND consumed_at IS NULL", [accountId, purpose]);
     await pool.query("INSERT INTO email_verification_tokens (token_hash, account_id, purpose, expires_at) VALUES ($1,$2,$3,$4)", [tokenHash, accountId, purpose, expiresAt]);
     return { token, expiresAt, account: accountFromRow(result.rows[0]), purpose };
   }
   const credential = Array.from(memory.credentials.values()).find(({ account }) => account.id === accountId);
   if (!credential) throw new Error("Account not found.");
-  for (const [key, item] of Array.from(memory.verifications.entries())) if (item.accountId === accountId) memory.verifications.delete(key);
+  for (const [key, item] of Array.from(memory.verifications.entries())) if (item.accountId === accountId && item.purpose === purpose) memory.verifications.delete(key);
   memory.verifications.set(tokenHash, { accountId, purpose, expiresAt: expiresAt.getTime() });
   return { token, expiresAt, account: credential.account, purpose };
 }
@@ -235,7 +241,7 @@ export async function verifyEmailToken(token: string) {
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
-      const result = await client.query("SELECT account_id, purpose FROM email_verification_tokens WHERE token_hash=$1 AND consumed_at IS NULL AND expires_at > NOW() FOR UPDATE", [tokenHash]);
+      const result = await client.query("SELECT account_id, purpose FROM email_verification_tokens WHERE token_hash=$1 AND purpose<>'password-reset' AND consumed_at IS NULL AND expires_at > NOW() FOR UPDATE", [tokenHash]);
       const row = result.rows[0];
       if (!row) throw new Error("This verification link is invalid or expired.");
       await client.query("UPDATE email_verification_tokens SET consumed_at=NOW() WHERE token_hash=$1", [tokenHash]);
@@ -252,6 +258,7 @@ export async function verifyEmailToken(token: string) {
     memory.verifications.delete(tokenHash);
     throw new Error("This verification link is invalid or expired.");
   }
+  if (verification.purpose === "password-reset") throw new Error("This verification link is invalid or expired.");
   const entry = Array.from(memory.credentials.entries()).find(([, credential]) => credential.account.id === verification.accountId);
   if (!entry) throw new Error("Account not found.");
   const [email, credential] = entry;
@@ -296,9 +303,64 @@ export async function listAccountIds() {
   if (pool) {
     await ensureAuthTables();
     const result = await pool.query("SELECT id FROM accounts ORDER BY created_at");
-    return result.rows.map((row) => String(row.id));
+    return result.rows.map((row) => String(row.id)).filter((accountId) => accountId !== demoAccountId);
   }
-  return [demoAccountId, ...Array.from(memory.credentials.values()).map(({ account }) => account.id)];
+  return Array.from(memory.credentials.values()).map(({ account }) => account.id);
+}
+
+export async function createPasswordReset(emailInput: string) {
+  const email = normalizeEmail(emailInput);
+  const pool = getDbPool();
+  if (pool) {
+    await ensureAuthTables();
+    const result = await pool.query("SELECT id FROM accounts WHERE LOWER(email)=LOWER($1) AND password_hash IS NOT NULL AND id<>$2", [email, demoAccountId]);
+    if (!result.rows[0]) return null;
+    return createEmailVerification(String(result.rows[0].id), "password-reset");
+  }
+  const credential = memory.credentials.get(email);
+  if (!credential) return null;
+  return createEmailVerification(credential.account.id, "password-reset");
+}
+
+export async function resetPasswordWithToken(token: string, newPassword: string) {
+  const tokenHash = hashToken(token);
+  const passwordHash = await hashPassword(newPassword);
+  const pool = getDbPool();
+  if (pool) {
+    await ensureAuthTables();
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const verification = await client.query("SELECT account_id FROM email_verification_tokens WHERE token_hash=$1 AND purpose='password-reset' AND consumed_at IS NULL AND expires_at > NOW() FOR UPDATE", [tokenHash]);
+      const row = verification.rows[0];
+      if (!row) throw new Error("This password reset link is invalid or expired.");
+      const accountResult = await client.query("UPDATE accounts SET password_hash=$2, email_verified_at=NOW() WHERE id=$1 RETURNING id, display_name, email, timezone, created_at, email_verified_at", [row.account_id, passwordHash]);
+      if (!accountResult.rows[0]) throw new Error("Account not found.");
+      await client.query("UPDATE email_verification_tokens SET consumed_at=NOW() WHERE account_id=$1 AND purpose='password-reset' AND consumed_at IS NULL", [row.account_id]);
+      await client.query("DELETE FROM auth_sessions WHERE account_id=$1", [row.account_id]);
+      await client.query("COMMIT");
+      return accountFromRow(accountResult.rows[0]);
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally { client.release(); }
+  }
+
+  const verification = memory.verifications.get(tokenHash);
+  if (!verification || verification.purpose !== "password-reset" || verification.expiresAt <= Date.now()) {
+    memory.verifications.delete(tokenHash);
+    throw new Error("This password reset link is invalid or expired.");
+  }
+  const entry = Array.from(memory.credentials.entries()).find(([, credential]) => credential.account.id === verification.accountId);
+  if (!entry) throw new Error("Account not found.");
+  const [email, credential] = entry;
+  const account = { ...credential.account, emailVerified: true };
+  memory.credentials.set(email, { account, passwordHash });
+  for (const [key, item] of Array.from(memory.verifications.entries())) {
+    if (item.accountId === account.id && item.purpose === "password-reset") memory.verifications.delete(key);
+  }
+  for (const [key, session] of Array.from(memory.sessions.entries())) if (session.accountId === account.id) memory.sessions.delete(key);
+  return account;
 }
 
 export async function getOnboardingCompleted(accountId: string) {

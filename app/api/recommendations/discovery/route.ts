@@ -1,4 +1,3 @@
-import { getGames } from "@/lib/mock-repository";
 import { getCurrentPreferences } from "@/lib/preferences-repository";
 import { getNbaProvider } from "@/lib/providers";
 import { getDiscoveryRecommendations } from "@/lib/recommendations/service";
@@ -17,7 +16,7 @@ export async function GET(request: Request) {
   try {
     games = await getNbaProvider().getGames();
   } catch {
-    games = getGames();
+    games = [];
   }
   const data = getDiscoveryRecommendations(preferences, games, news.articles, savedArticles);
   const mode = preferences.followedTeamIds.length === 0 && preferences.followedPlayerIds.length === 0 && savedArticles.length === 0 ? "popular" : "personalized";

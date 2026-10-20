@@ -13,6 +13,7 @@ export async function GET(request: Request) {
 
 export async function PATCH(request: Request) {
   const context = await getAccountContext(request);
+  if (!context.authenticated) return Response.json({ error: "Sign in to save preferences." }, { status: 401 });
   const body = await request.json() as Partial<Preferences>;
   await loadCatalog();
   const validTeamIds = teamIds();

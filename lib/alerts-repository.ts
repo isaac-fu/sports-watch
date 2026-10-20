@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import type { AlertCandidate, AlertType, DeliveredAlert } from "./models";
 import { getDbPool } from "./db";
+import { demoAccountId } from "./store";
 
 declare global { var __courtsideAlertDeliveriesByAccount: Record<string, DeliveredAlert[]> | undefined; }
 
@@ -62,6 +63,7 @@ function deliverToMemory(accountId: string, candidates: AlertCandidate[]) {
 }
 
 export async function deliverAlertCandidates(accountId: string, candidates: AlertCandidate[]) {
+  if (accountId === demoAccountId) return [];
   try {
     const pool = await ensureTable();
     if (!pool) return deliverToMemory(accountId, candidates);
@@ -82,6 +84,7 @@ export async function deliverAlertCandidates(accountId: string, candidates: Aler
 }
 
 export async function listDeliveredAlerts(accountId: string) {
+  if (accountId === demoAccountId) return [];
   try {
     const pool = await ensureTable();
     if (!pool) return [...memoryFor(accountId)].sort((left, right) => right.priority - left.priority || right.deliveredAt.localeCompare(left.deliveredAt));
@@ -93,6 +96,7 @@ export async function listDeliveredAlerts(accountId: string) {
 }
 
 export async function markAlertsRead(accountId: string, id?: string) {
+  if (accountId === demoAccountId) return [];
   const readAt = new Date().toISOString();
   try {
     const pool = await ensureTable();

@@ -1,6 +1,5 @@
 import type { Game, GameCenter } from "./models";
 import { deliverAlertCandidates, listDeliveredAlerts, markAlertsRead } from "./alerts-repository";
-import { getGames } from "./mock-repository";
 import { getCurrentPreferences } from "./preferences-repository";
 import { getNbaProvider } from "./providers";
 import { getRankedAlertCandidates } from "./recommendations/service";
@@ -20,7 +19,7 @@ async function loadAlertWindowGames() {
   try {
     games = await getNbaProvider().getGames({ from: toDateKey(from), to: toDateKey(to) });
   } catch {
-    games = getGames({ from: toDateKey(from), to: toDateKey(to) });
+    games = [];
   }
   return games;
 }

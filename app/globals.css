@@ -140,6 +140,8 @@ button { color: inherit; font: inherit; cursor: pointer; }
 .live-detail { max-width: 560px; }
 .live-games-grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); max-width: 980px; }
 .catch-up-button:disabled { cursor: wait; opacity: .65; transform: none; }
+.catch-up-loading-icon { animation: catch-up-pulse 1.1s ease-in-out infinite; }
+@keyframes catch-up-pulse { 0%, 100% { opacity: .4; transform: scale(.86); } 50% { opacity: 1; transform: scale(1.08); } }
 .moment-list small { color: var(--gold); display: block; font-family: 'DM Mono', monospace; font-size: 8px; margin-top: 4px; }
 .notification-menu { position: relative; }
 .notification-panel { background: #1b1e1d; border: 1px solid #3b3e3a; border-radius: 9px; box-shadow: 0 18px 60px #0008; max-height: 520px; overflow-y: auto; padding: 18px; position: absolute; right: 0; top: 32px; width: min(390px, calc(100vw - 36px)); z-index: 9; }
@@ -179,6 +181,8 @@ button { color: inherit; font: inherit; cursor: pointer; }
 .auth-submit:disabled { cursor: wait; opacity: .65; }
 .auth-submit span { font-size: 15px; }
 .auth-switch { background: transparent; border: 0; color: var(--gold); display: block; font-size: 9px; margin: 17px auto 0; }
+.auth-links { align-items: center; display: flex; flex-wrap: wrap; gap: 6px 18px; justify-content: center; margin-top: 17px; }
+.auth-links .auth-switch { margin: 0; }
 .auth-demo { border-top: 1px solid var(--line); color: var(--subtle); font-size: 8px; line-height: 1.5; margin: 20px 0 0; padding-top: 15px; text-align: center; }
 .auth-error { background: #3a2421; border: 1px solid #63352e; border-radius: 5px; color: #f09b89; font-size: 9px; line-height: 1.5; margin: 0; padding: 9px 10px; }
 
@@ -321,10 +325,22 @@ button { color: inherit; font: inherit; cursor: pointer; }
 .catch-up-assistant form > button { justify-self: start; }
 .catch-up-assistant button:disabled { cursor: wait; opacity: .55; }
 .assistant-error { color: var(--coral); font-size: 9px; line-height: 1.5; }
-.assistant-answer { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 14px; }
-.assistant-answer strong { color: var(--gold); font-size: 9px; }
-.assistant-answer p { color: var(--ink); font-size: 10px; line-height: 1.65; margin: 7px 0; }
-.assistant-answer small { color: var(--subtle); font-family: 'DM Mono', monospace; font-size: 7px; }
+.assistant-answer-slide { position: relative; }
+.assistant-answer-back { align-self: flex-start; background: transparent; border: 0; color: var(--muted); font-size: 9px; margin: -4px 0 18px; padding: 4px 0; }
+.assistant-answer-back:hover { color: var(--gold); }
+.assistant-answer-back:disabled { cursor: wait; opacity: .45; }
+.assistant-answer-slide .slide-reason { margin: 4px 0 10px; }
+.assistant-answer-content { color: var(--ink); font-size: 12px; line-height: 1.72; overflow-y: auto; padding-right: 5px; }
+.assistant-answer-content p { margin: 0 0 13px; }
+.assistant-answer-content h4 { color: var(--ink); font-size: 14px; margin: 16px 0 8px; }
+.assistant-answer-content ul, .assistant-answer-content ol { display: grid; gap: 7px; margin: 2px 0 15px; padding-left: 20px; }
+.assistant-answer-content strong { color: var(--gold); font-weight: 750; }
+.assistant-answer-content em { color: var(--green); }
+.assistant-answer-content code { background: var(--panel); border: 1px solid var(--line); border-radius: 3px; color: var(--gold); font-family: 'DM Mono', monospace; font-size: 10px; padding: 2px 4px; }
+.assistant-answer-meta { border-top: 1px solid var(--line); color: var(--subtle); display: block; font-family: 'DM Mono', monospace; font-size: 7px; margin-top: auto; padding-top: 15px; }
+.assistant-answer-loading { align-items: center; color: var(--muted); display: flex; flex: 1; flex-direction: column; gap: 9px; justify-content: center; text-align: center; }
+.assistant-answer-loading strong { color: var(--ink); font-size: 12px; }
+.assistant-answer-loading small { color: var(--subtle); font-size: 8px; }
 .inline-citation { color: var(--gold); font-family: 'DM Mono', monospace; font-size: 7px; margin-left: 2px; text-decoration: none; vertical-align: super; }
 .inline-citation:hover { text-decoration: underline; }
 .assistant-sources { border-top: 1px solid var(--line); margin-top: 13px; padding-top: 11px; }

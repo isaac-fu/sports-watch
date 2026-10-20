@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { authenticateAccount, createEmailVerification, EmailNotVerifiedError, InvalidCurrentPasswordError, registerAccount, updateAccountSettings, verifyEmailToken } from "@/lib/auth-repository";
+import { authenticateAccount, createEmailVerification, createSession, EmailNotVerifiedError, InvalidCurrentPasswordError, registerAccount, resolveSession, updateAccountSettings, verifyEmailToken } from "@/lib/auth-repository";
 
 async function verify(accountId: string, purpose: "signup" | "password-change" = "signup") {
   const verification = await createEmailVerification(accountId, purpose);
@@ -25,6 +25,21 @@ describe("account settings", () => {
     const account = await registerAccount({ displayName: "Test User", email, password: "old-password-123", timezone: "America/Los_Angeles" });
     await verify(account.id);
     await expect(updateAccountSettings(account.id, { currentPassword: "wrong-password", newPassword: "new-password-456" })).rejects.toBeInstanceOf(InvalidCurrentPasswordError);
+  });
+
+  it("revokes every existing session when the password changes", async () => {
+    const email = `settings-sessions-${Date.now()}-${Math.random()}@example.com`;
+    const account = await registerAccount({ displayName: "Session Owner", email, password: "old-password-123", timezone: "America/Los_Angeles" });
+    await verify(account.id);
+    const first = await createSession(account.id);
+    const second = await createSession(account.id);
+    expect(await resolveSession(first.token)).toMatchObject({ id: account.id });
+    expect(await resolveSession(second.token)).toMatchObject({ id: account.id });
+
+    await updateAccountSettings(account.id, { currentPassword: "old-password-123", newPassword: "new-password-456" });
+
+    expect(await resolveSession(first.token)).toBeNull();
+    expect(await resolveSession(second.token)).toBeNull();
   });
 
   it("updates the timezone used for regional game times", async () => {

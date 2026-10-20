@@ -1,5 +1,6 @@
 import type { NewsArticle, SavedArticle } from "./models";
 import { getDbPool } from "./db";
+import { demoAccountId } from "./store";
 
 declare global { var __courtsideSavedArticlesByAccount: Record<string, SavedArticle[]> | undefined; }
 
@@ -54,6 +55,7 @@ function saveToMemory(accountId: string, article: NewsArticle): SavedArticle {
 }
 
 export async function listSavedArticles(accountId: string): Promise<SavedArticle[]> {
+  if (accountId === demoAccountId) return [];
   try {
     const pool = await ensureTable();
     if (!pool) return [...memoryFor(accountId)];
@@ -65,6 +67,7 @@ export async function listSavedArticles(accountId: string): Promise<SavedArticle
 }
 
 export async function saveArticle(accountId: string, article: NewsArticle): Promise<SavedArticle> {
+  if (accountId === demoAccountId) throw new Error("Sign in to save stories.");
   try {
     const pool = await ensureTable();
     if (!pool) return saveToMemory(accountId, article);
@@ -84,6 +87,7 @@ export async function saveArticle(accountId: string, article: NewsArticle): Prom
 }
 
 export async function removeSavedArticle(accountId: string, articleId: string) {
+  if (accountId === demoAccountId) return;
   try {
     const pool = await ensureTable();
     if (pool) await pool.query("DELETE FROM saved_articles WHERE account_id=$1 AND article_id=$2", [accountId, articleId]);

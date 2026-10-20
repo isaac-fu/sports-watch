@@ -1,6 +1,5 @@
 import type { Game, GameCenter, GameEvent } from "@/lib/models";
 import { getNbaProvider } from "@/lib/providers";
-import { mockProvider } from "@/lib/providers/mock-provider";
 import type { NbaProvider } from "@/lib/providers/types";
 import { loadCatalog } from "@/lib/catalog-repository";
 
@@ -52,19 +51,13 @@ async function loadFromProvider(provider: NbaProvider, gameId: string) {
 
 export async function getGameCenter(gameId: string): Promise<GameCenter | null> {
   await loadCatalog();
-  const configuredProvider = getNbaProvider();
-  let provider = configuredProvider;
+  const provider = getNbaProvider();
   let loaded;
 
   try {
-    loaded = await loadFromProvider(configuredProvider, gameId);
+    loaded = await loadFromProvider(provider, gameId);
   } catch {
     loaded = null;
-  }
-
-  if (!loaded && configuredProvider.name !== mockProvider.name) {
-    provider = mockProvider;
-    loaded = await loadFromProvider(mockProvider, gameId);
   }
   if (!loaded) return null;
 

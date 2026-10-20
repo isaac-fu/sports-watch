@@ -12,6 +12,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const context = await getAccountContext(request);
+  if (!context.authenticated) return Response.json({ error: "Sign in to save stories." }, { status: 401 });
   const body = await request.json().catch(() => null) as { articleId?: unknown } | null;
   if (typeof body?.articleId !== "string" || !body.articleId.trim()) return Response.json({ error: "articleId must be a non-empty string." }, { status: 400 });
   const snapshot = await loadNewsArticles();
@@ -23,6 +24,7 @@ export async function POST(request: Request) {
 
 export async function DELETE(request: Request) {
   const context = await getAccountContext(request);
+  if (!context.authenticated) return Response.json({ error: "Sign in to manage saved stories." }, { status: 401 });
   const articleId = new URL(request.url).searchParams.get("articleId");
   if (!articleId) return Response.json({ error: "articleId is required." }, { status: 400 });
   await removeSavedArticle(context.accountId, articleId);

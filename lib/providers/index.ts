@@ -7,6 +7,13 @@ import { RssNewsProvider } from "./rss-news-provider";
 import { BallDontLieStatsProvider, mockStatsProvider, type StatsProvider } from "./stats-provider";
 import { NbaApiProvider } from "./nba-api-provider";
 
+const unavailableSportsProvider = (selected: string): NbaProvider => ({
+  name: `${selected}-unavailable`,
+  async getGames() { throw new Error(`${selected} sports provider is not configured.`); },
+  async getGame() { throw new Error(`${selected} sports provider is not configured.`); },
+  async getGameEvents() { throw new Error(`${selected} sports provider is not configured.`); },
+});
+
 function nbaApiProvider() {
   const parsedTimeout = Number(process.env.NBA_API_SERVICE_TIMEOUT_MS ?? "120000");
   return new NbaApiProvider({
@@ -16,9 +23,11 @@ function nbaApiProvider() {
 }
 
 export function getNbaProvider(): NbaProvider {
+  const selected = (process.env.SPORTS_DATA_PROVIDER ?? "mock").trim().toLowerCase();
   const apiKey = process.env.BALLDONTLIE_API_KEY;
-  if (process.env.SPORTS_DATA_PROVIDER === "balldontlie" && apiKey) return new BallDontLieProvider(apiKey, process.env.BALLDONTLIE_BASE_URL);
-  return mockProvider;
+  if (selected === "mock") return mockProvider;
+  if (selected === "balldontlie" && apiKey) return new BallDontLieProvider(apiKey, process.env.BALLDONTLIE_BASE_URL);
+  return unavailableSportsProvider(selected);
 }
 
 export function getCatalogProvider(): CatalogProvider | null {
