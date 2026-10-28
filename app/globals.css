@@ -106,7 +106,8 @@ button { color: inherit; font: inherit; cursor: pointer; }
 .schedule-view-tabs button { background: transparent; border: 0; border-radius: 3px; color: var(--muted); font-size: 9px; padding: 8px 3px; text-transform: capitalize; }
 .schedule-view-tabs button.active { background: var(--gold); color: #ffffff; font-weight: 700; }
 .soonest-description { color: var(--subtle); font-size: 9px; line-height: 1.5; margin: 12px 0 2px; }
-.soonest-list { margin-top: 8px; }
+.soonest-list { margin-top: 8px; max-height: min(520px, 65vh); overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding-right: 6px; }
+.soonest-list:focus-visible { outline: 2px solid var(--gold); outline-offset: 3px; }
 .soonest-list .schedule-game-row { gap: 9px; }
 .soonest-list .schedule-game-date { flex-basis: 38px; padding-right: 7px; }
 .soonest-list .schedule-matchup { display: grid; gap: 4px; }

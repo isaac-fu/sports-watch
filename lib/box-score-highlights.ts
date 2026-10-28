@@ -7,6 +7,36 @@ const shooting = (value: string | null) => {
   return match ? { made: Number(match[1]), attempts: Number(match[2]) } : null;
 };
 
+/** A game occupies exactly one story. Lower-priority leaders only fill spare slots. */
+export function gameCatchUpStory(game: Game, box: GameBoxScore | null, preferences: Preferences): CatchUpMoment | null {
+  if (game.status === "scheduled") return null;
+  const highlights = boxScoreHighlights(game, box, preferences, 100);
+  if (!highlights.length) return null;
+  const result = highlights.find((item) => item.id === `${game.id}:result`);
+  const standouts = highlights.filter((item) => item.reason === "Standout box-score performance").slice(0, 6);
+  const leaders = highlights.filter((item) => item.reason === "Team statistical leader").slice(0, Math.min(2, 6 - standouts.length));
+  const summary = result?.detail ?? "The game score is unavailable. Player statistics are shown below.";
+  let title = `${game.away.short} at ${game.home.short}`;
+  if (game.homeScore !== undefined && game.awayScore !== undefined) {
+    const margin = Math.abs(game.homeScore - game.awayScore);
+    const homeLeads = game.homeScore > game.awayScore;
+    const leader = homeLeads ? game.home : game.away;
+    const other = homeLeads ? game.away : game.home;
+    const high = Math.max(game.homeScore, game.awayScore), low = Math.min(game.homeScore, game.awayScore);
+    title = margin
+      ? `${leader.name} ${game.status === "final" ? "beat" : "lead"} ${other.name}, ${high}–${low} (${margin}-point ${game.status === "final" ? "win" : "lead"})`
+      : `${game.away.short} and ${game.home.short} tied ${high}–${low} (0-point differential)`;
+  }
+  const points = (items: CatchUpMoment[]) => items.map(({ title, detail }) => ({ title, detail }));
+  return {
+    id: `${game.id}:story`, gameId: game.id, title, reason: game.status === "final" ? "Game recap" : "Live game recap",
+    source: "box-score", importanceScore: 100,
+    context: game.status === "live" ? "In progress · statistics may change" : "Final",
+    detail: [summary, ...standouts.map((item) => `${item.title}. ${item.detail}`), ...leaders.map((item) => `${item.title}. ${item.detail}`)].join("\n\n"),
+    gameHighlights: { summary, standouts: points(standouts), leaders: points(leaders) },
+  };
+}
+
 export function boxScoreHighlights(game: Game, box: GameBoxScore | null, preferences: Preferences, limit = 3): CatchUpMoment[] {
   if (game.status === "scheduled") return [];
   const result: CatchUpMoment[] = [];

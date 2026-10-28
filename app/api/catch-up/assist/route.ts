@@ -2,8 +2,9 @@ import { answerCatchUpQuestion } from "@/lib/catch-up-assistant";
 import { loadNewsArticles, loadSeasonStats } from "@/lib/content-repository";
 import { getGameCenter } from "@/lib/game-center-service";
 import { getCachedBoxScore } from "@/lib/box-score-service";
-import { boxScoreHighlights } from "@/lib/box-score-highlights";
-import { createDefaultPreferences } from "@/lib/store";
+import { boxScoreHighlights, gameCatchUpStory } from "@/lib/box-score-highlights";
+import { getAccountContext } from "@/lib/auth-session";
+import { getCurrentPreferences } from "@/lib/preferences-repository";
 import type { CatchUpMoment, NewsArticle } from "@/lib/models";
 import { currentNbaSeasonStart } from "@/lib/season";
 
@@ -63,7 +64,10 @@ export async function POST(request: Request) {
       if (!gameId) return Response.json({ error: "The game context for this update is missing." }, { status: 400 });
       const center = await getGameCenter(gameId).catch(() => null);
       const box = center ? await getCachedBoxScore(center.game) : null;
-      const gameMoment = center ? boxScoreHighlights(center.game, box, createDefaultPreferences(false), 100).find((item) => item.id === momentId) : null;
+      const account = await getAccountContext(request);
+      const preferences = await getCurrentPreferences(account.accountId);
+      const story = center ? gameCatchUpStory(center.game, box, preferences) : null;
+      const gameMoment = story?.id === momentId ? story : center ? boxScoreHighlights(center.game, box, preferences, 100).find((item) => item.id === momentId) : null;
       if (!center || !gameMoment) return Response.json({ error: "Game update not found." }, { status: 404 });
       moment = gameMoment;
       relevantStats = [gameMoment.detail];

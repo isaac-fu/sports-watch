@@ -1,0 +1,16 @@
+.game-catchup-story { cursor: pointer; border-radius: 7px; padding: 12px; margin: 0 -12px; }
+.game-catchup-story:hover { background: var(--panel); }
+.game-catchup-story:focus-visible { outline: 2px solid var(--gold); outline-offset: 3px; }
+.game-story-status { color: var(--gold); font-size: 10px; font-weight: 700; text-transform: uppercase; }
+.catch-up-slide .game-catchup-story h3 { color: var(--ink); font-size: 23px; line-height: 1.4; }
+.game-catchup-story h4 { font-size: 12px; margin: 20px 0 10px; color: var(--gold); }
+.game-catchup-story ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 13px; }
+.game-catchup-story li { border-left: 3px solid var(--gold); padding-left: 12px; }
+.game-catchup-story li strong { display: block; font-size: 13px; line-height: 1.5; color: var(--ink); }
+.game-catchup-story li p { color: var(--muted); font-size: 11px; line-height: 1.65; margin: 5px 0 0; }
+.game-story-leaders { border-top: 1px solid var(--line); margin-top: 20px; }
+.game-story-leaders h4 { color: var(--muted); }
+.game-story-leaders li { border-left-color: var(--line); }
+.game-story-leaders li strong { color: var(--muted); font-size: 12px; }
+.game-story-box-link { color: var(--gold); display: block; font-weight: 700; margin-top: 20px; font-size: 12px; }
+@media (max-width: 760px) { .catch-up-slide .game-catchup-story h3 { font-size: 19px; } }

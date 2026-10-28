@@ -76,6 +76,12 @@ export type CatchUpMoment = {
   importanceScore: number;
   source: "game-event" | "box-score" | "news";
   context?: string;
+  gameId?: string;
+  gameHighlights?: {
+    summary: string;
+    standouts: { title: string; detail: string }[];
+    leaders: { title: string; detail: string }[];
+  };
 };
 
 export type CatchUpBrief = {

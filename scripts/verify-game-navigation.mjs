@@ -6,6 +6,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || "playwright");
 const browser = await chromium.launch({ headless: true, channel: process.env.PLAYWRIGHT_CHANNEL || undefined });
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  await page.route("**/leaderboard-test.svg", (route) => route.fulfill({ contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36"><circle cx="18" cy="18" r="16" fill="blue"/></svg>' }));
   page.setDefaultTimeout(15_000);
   await page.clock.install();
   const errors = [];
@@ -31,6 +32,8 @@ try {
   let homeRequests = 0;
   let allowHomeRecovery = false;
   let feedbackInterest = null;
+  let useGameStory = false;
+  const gameStory = { id: `${final.id}:story`, gameId: final.id, title: "Golden State Warriors beat Los Angeles Lakers, 114–108 (6-point win)", reason: "Game recap", source: "box-score", importanceScore: 100, context: "Final", detail: "A complete game recap.", gameHighlights: { summary: "Warriors won by six.", standouts: [{ title: "Stephen Curry: 30 points", detail: "30 points, 8 assists, 4 rebounds." }, { title: "Teammate: double-double", detail: "20 points and 12 rebounds." }], leaders: [{ title: "Opponent: team-leading 7 assists", detail: "7 assists and 8 points." }] } };
   const newsMoment = { id: "news-test", title: "NBA betting preview", detail: "A league betting preview.", reason: "Recent NBA news", importanceScore: 70, source: "news" };
   const playerSeason = { playerId: player.id, playerName: player.name, teamId: "gsw", teamName: teams[0].name, season: 2026, seasonLabel: "2026-27", gamesPlayed: 3, pointsPerGame: 30, reboundsPerGame: 4, assistsPerGame: 8, stealsPerGame: 2, blocksPerGame: 1, turnoversPerGame: 3, fieldGoalPercentage: 50, threePointPercentage: 40, freeThrowPercentage: 90 };
   const line = { playerId: player.id, name: player.name, minutes: "32:10", points: 30, rebounds: 4, assists: 8, steals: 2, blocks: 0, turnovers: 3, fouls: 2, fieldGoals: "10-20", threePointers: "6-12", freeThrows: "4-5", freeThrowsMade: 4, plusMinus: 6 };
@@ -63,8 +66,8 @@ try {
       data = path.endsWith("/box-score") ? { gameId: game.id, source: "nba_api", status: game.status === "scheduled" ? "pending" : "available", updatedAt: new Date().toISOString(), teams: [{ teamId: "gsw", name: teams[0].name, players: [line], totals: line }] } : { game, events: [], keyMoments: [], source: "balldontlie", playByPlayStatus: "unavailable", updatedAt: new Date().toISOString() };
     } else if (path.startsWith("/api/teams/")) data = { team: teams[0], roster: [player], seasonLabel: "2026-27", stats: { wins: 1, losses: 0, conferenceRank: 1, pointsPerGame: 114, pointsAllowedPerGame: 108 }, rankings: { record: 1, conference: 1, pointsPerGame: 1, pointsAllowedPerGame: 1, pointDifferential: 1, leagueSize: 30 }, standings: [], standingsSeasonLabel: "2026-27", standingsUsesPreviousSeason: false, recentGames: [final], upcomingGames: [future], articles: [], source: "nba_api", updatedAt: new Date().toISOString() };
     else if (path.startsWith("/api/players/")) data = { player, bio: {}, currentSeason: playerSeason, career: null, seasons: [playerSeason], lastTenGames: [{ ...line, id: "log", date: oldDate, opponentShort: "LAL", homeAway: "home", result: "W", score: "114-108" }], source: "nba_api", updatedAt: new Date().toISOString() };
-    else if (path === "/api/leaderboard") data = { players: [playerSeason, { ...playerSeason, playerId: "other", playerName: "Other Player", pointsPerGame: 20, reboundsPerGame: 12 }], teams: [{ teamId: "gsw", teamName: teams[0].name, wins: 2, losses: 1 }], seasonLabel: "2026-27", source: "nba_api", updatedAt: new Date().toISOString(), stale: false };
-    else if (path === "/api/catch-up") { data = { title: "NBA catch-up", lede: "Recent NBA updates", readTimeMinutes: 1, generatedAt: String(Date.now()), game: null, moments: feedbackInterest === "not-interested" ? [] : [newsMoment], source: "news" }; meta = { ready: true }; }
+    else if (path === "/api/leaderboard") data = { players: [playerSeason, { ...playerSeason, playerId: "other", playerName: "Other Player", pointsPerGame: 20, reboundsPerGame: 12 }].map((entry) => ({ ...entry, imageUrl: "/leaderboard-test.svg", teamImageUrl: "/leaderboard-test.svg", teamShort: "GSW" })), teams: [{ teamId: "gsw", teamName: teams[0].name, wins: 2, losses: 1, conference: "Western", imageUrl: "/leaderboard-test.svg" }, { teamId: "bos", teamName: "Boston Celtics", wins: 3, losses: 0, conference: "Eastern", imageUrl: "/leaderboard-test.svg" }], seasonLabel: "2026-27", source: "nba_api", updatedAt: new Date().toISOString(), stale: false };
+    else if (path === "/api/catch-up") { data = { title: "NBA catch-up", lede: "Recent NBA updates", readTimeMinutes: 1, generatedAt: String(Date.now()), game: useGameStory ? final : null, moments: useGameStory ? [gameStory] : feedbackInterest === "not-interested" ? [] : [newsMoment], source: useGameStory ? "box-score" : "news" }; meta = { ready: true }; }
     else if (path === "/api/news/news-test/feedback") { feedbackInterest = route.request().postDataJSON().interest; data = {}; }
     await route.fulfill({ json: { data, meta } });
   });
@@ -105,6 +108,15 @@ try {
   console.log("Home game navigation passed");
   await page.getByRole("navigation", { name: "Main navigation", exact: true }).getByRole("button", { name: /Schedule/ }).click();
   await page.locator(".schedule-layout[aria-busy=false]").waitFor();
+  await page.getByRole("tablist", { name: "Soonest games range" }).getByRole("button", { name: "month", exact: true }).click();
+  const scheduleList = page.getByRole("region", { name: "Schedule games", exact: true });
+  await scheduleList.waitFor();
+  const scrollStyle = await scheduleList.evaluate((list) => ({ overflow: getComputedStyle(list).overflowY, maxHeight: parseFloat(getComputedStyle(list).maxHeight), height: list.getBoundingClientRect().height, focusable: list.tabIndex }));
+  assert.equal(scrollStyle.overflow, "auto");
+  assert.ok(scrollStyle.maxHeight > 0 && scrollStyle.maxHeight <= 520);
+  assert.ok(scrollStyle.height <= scrollStyle.maxHeight + 1);
+  assert.equal(scrollStyle.focusable, 0);
+  await page.getByRole("tablist", { name: "Soonest games range" }).getByRole("button", { name: "day", exact: true }).click();
   holdMonth = true;
   await page.getByRole("button", { name: "Previous month", exact: true }).click();
   await page.locator(".schedule-layout[aria-busy=true]").waitFor();
@@ -148,7 +160,29 @@ try {
   await seasonTable.getByRole("cell", { name: "90", exact: true }).waitFor();
   await page.getByRole("button", { name: "View RPG leaderboard", exact: true }).click();
   await page.getByRole("heading", { name: "Player leaderboard · RPG", exact: true }).waitFor();
+  await page.getByRole("heading", { name: "Standings", exact: true }).waitFor();
+  assert.equal(await page.locator(".standings-scroll").count(), 1);
+  assert.equal(await page.getByLabel("Western Conference standings", { exact: true }).locator("tbody tr").count(), 1);
+  await page.getByRole("group", { name: "Conference", exact: true }).getByRole("button", { name: "East", exact: true }).click();
+  assert.equal(await page.getByRole("button", { name: "East", exact: true }).getAttribute("aria-pressed"), "true");
+  assert.equal(await page.getByLabel("Western Conference standings", { exact: true }).count(), 0);
+  assert.equal(await page.getByLabel("Eastern Conference standings", { exact: true }).locator("tbody td").first().textContent(), "1");
+  assert.equal(await page.locator(".standings-scroll img").count(), 1);
+  await page.getByRole("group", { name: "Conference", exact: true }).getByRole("button", { name: "West", exact: true }).click();
+  const rankWidth = await page.locator(".standings-scroll tbody td").first().evaluate((cell) => cell.getBoundingClientRect().width);
+  assert.ok(rankWidth <= 56, `Rank column should be compact, got ${rankWidth}`);
   const playerBoard = page.getByLabel("Player statistics leaderboard", { exact: true });
+  await page.waitForFunction(() => { const image = document.querySelector(".selected-player .leaderboard-icon.player img"); return image?.complete && image.naturalWidth > 0; });
+  await playerBoard.locator(".selected-player .leaderboard-icon.player img").dispatchEvent("error");
+  assert.equal(await playerBoard.locator(".selected-player .leaderboard-icon.player.fallback").count(), 1);
+  assert.equal(await playerBoard.locator(".selected-player .leaderboard-player-team img").count(), 1);
+  assert.match(await playerBoard.locator(".selected-player .leaderboard-player-team").textContent(), /^· \d+ GP$/);
+  const inlinePlayer = await playerBoard.locator(".selected-player .leaderboard-player-info").evaluate((row) => {
+    const name = row.querySelector("button").getBoundingClientRect();
+    const detail = row.querySelector("small").getBoundingClientRect();
+    return detail.left >= name.right && Math.abs((name.top + name.bottom) / 2 - (detail.top + detail.bottom) / 2) < 2;
+  });
+  assert.ok(inlinePlayer, "Team logo and GP should sit beside the player name");
   assert.equal(await playerBoard.locator("tbody tr").first().getByRole("button").textContent(), "Other Player");
   assert.equal(await playerBoard.locator(".selected-player").getByRole("button").textContent(), "Stephen Curry");
   assert.deepEqual((await playerBoard.locator("thead th").allTextContents()).map((value) => value.replace(" ↓", "")), ["Rank", "Player", "PPG", "RPG", "APG", "SPG", "BPG", "FG%", "3P%", "FT%"]);
@@ -179,6 +213,21 @@ try {
   assert.equal(feedbackInterest, "not-interested");
   await page.getByRole("button", { name: "Close catch-up", exact: true }).click();
   console.log("Custom accent themes, reset, and catch-up feedback passed");
+  useGameStory = true;
+  await page.locator(".catch-up-button").click();
+  await page.getByText("STORY 1 OF 1", { exact: true }).waitFor();
+  await page.getByRole("heading", { name: gameStory.title, exact: true }).waitFor();
+  assert.deepEqual(await page.locator(".game-catchup-story h4").allTextContents(), ["Standout performances", "Statistical leaders"]);
+  assert.equal(await page.locator(".game-story-standouts li").count(), 2);
+  await page.getByRole("link", { name: `Open box score: ${gameStory.title}`, exact: true }).click();
+  await page.getByRole("heading", { name: "LAL at GSW", level: 1, exact: true }).waitFor();
+  await page.getByRole("cell", { name: "30", exact: true }).first().waitFor();
+  assert.equal(await page.getByRole("dialog").count(), 0, "opening a box score closes the recap");
+  await page.getByRole("button", { name: "← Home", exact: true }).click();
+  await page.locator(".catch-up-button").click();
+  await page.getByRole("link", { name: `Open box score: ${gameStory.title}`, exact: true }).press("Enter");
+  await page.getByRole("heading", { name: "LAL at GSW", level: 1, exact: true }).waitFor();
+  console.log("One-game stories, content hierarchy, and pointer/keyboard box-score navigation passed");
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole("navigation", { name: "Mobile navigation", exact: true }).getByRole("button", { name: /Leaderboard/ }).click();
   await page.getByRole("heading", { name: "Leaderboard", exact: true }).waitFor();

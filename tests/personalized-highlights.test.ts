@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { boxScoreHighlights } from "@/lib/box-score-highlights";
+import { boxScoreHighlights, gameCatchUpStory } from "@/lib/box-score-highlights";
 import { createDefaultPreferences } from "@/lib/store";
 import { canonicalTeams, canonicalPlayers } from "@/lib/catalog";
 import type { Game, NewsArticle } from "@/lib/models";
@@ -17,6 +17,33 @@ const box = (...players: BoxScoreLine[]): GameBoxScore => ({ gameId: game.id, so
 const article = (id: string, title: string): NewsArticle => ({ id, title, summary: "The latest NBA update.", source: "NBA Wire", publishedAt: new Date().toISOString(), url: `https://example.com/${id}`, teamIds: [], playerIds: [], tags: ["nba"] });
 
 describe("box-score catch-up priorities", () => {
+  it("combines the game result and player performances into one story, leaving room for news", () => {
+    const stats = box(line("Triple", { points: 30, assists: 11, rebounds: 10 }), line("Scorer", { points: 35 }));
+    stats.teams.push({ teamId: game.away.id, name: game.away.name, totals: null, players: [line("Passer", { points: 6, assists: 7 })] });
+    const brief = getCatchUpBrief(preferences, [game], [article("n1", "NBA trade update"), article("n2", "NBA injury update")], null, [], stats);
+    expect(brief.moments.map((item) => item.source)).toEqual(["box-score", "news", "news"]);
+    const story = brief.moments[0];
+    expect(story.gameId).toBe(game.id);
+    expect(story.title).toContain("120–110");
+    expect(story.title).toContain("10-point win");
+    expect(story.gameHighlights?.standouts[0].title).toContain("triple-double");
+    expect(story.gameHighlights?.leaders[0].title).toContain("7 assists");
+    expect(story.detail).toContain("Triple");
+    expect(story.detail).toContain("Scorer");
+  });
+  it("uses spare space for leaders without displacing standout performances", () => {
+    const stats = box(...Array.from({ length: 6 }, (_, i) => line(`Star ${i}`, { points: 30 + i })), line("Leader", { assists: 7 }));
+    const story = gameCatchUpStory(game, stats, preferences)!;
+    expect(story.gameHighlights?.standouts).toHaveLength(6);
+    expect(story.gameHighlights?.leaders).toHaveLength(0);
+  });
+  it("keeps a navigable result story when the box score is unavailable", () => {
+    const story = gameCatchUpStory(game, null, preferences)!;
+    expect(story.gameId).toBe(game.id);
+    expect(story.gameHighlights?.standouts).toEqual([]);
+    expect(gameCatchUpStory({ ...game, status: "scheduled" }, null, preferences)).toBeNull();
+    expect(gameCatchUpStory({ ...game, status: "live" }, null, preferences)?.title).toContain("10-point lead");
+  });
   it("puts the result before triple doubles, exceptional scoring, and ordinary leaders", () => {
     const highlights = boxScoreHighlights(game, box(line("Leader", { points: 31 }), line("Triple", { points: 20, rebounds: 10, assists: 12 }), line("Fifty", { points: 55 })), preferences, 4);
     expect(highlights[0]).toMatchObject({ source: "box-score", reason: "Final result" });

@@ -1,4 +1,4 @@
-import { boxScoreHighlights } from "@/lib/box-score-highlights";
+import { gameCatchUpStory } from "@/lib/box-score-highlights";
 import type { GameBoxScore } from "@/lib/box-score";
 import type { CatchUpBrief, Game, GameCenter, NewsArticle, Preferences, SavedArticle } from "@/lib/models";
 import { canonicalPlayers, canonicalTeams } from "@/lib/catalog";
@@ -63,7 +63,8 @@ export function selectCatchUpGame(preferences: Preferences, games: Game[]) {
 export function getCatchUpBrief(preferences: Preferences, games: Game[], articles: NewsArticle[] = mockNews, gameCenter: GameCenter | null = null, savedArticles: SavedArticle[] = [], box: GameBoxScore | null = null): CatchUpBrief {
   const coldStart = preferences.followedTeamIds.length === 0 && preferences.followedPlayerIds.length === 0;
   const relevantGame = gameCenter ? (gameCenter.game.status !== "scheduled" ? gameCenter.game : null) : selectCatchUpGame(preferences, games);
-  const gameMoments = relevantGame ? boxScoreHighlights(relevantGame, box, preferences) : [];
+  const gameStory = relevantGame ? gameCatchUpStory(relevantGame, box, preferences) : null;
+  const gameMoments = gameStory ? [gameStory] : [];
   const newsMoments = rankCatchUpCandidates(generateNewsCandidates(articles, canonicalTeams, canonicalPlayers, preferences, savedArticles));
   const moments = [...gameMoments, ...newsMoments].slice(0, 3);
   const source: CatchUpBrief["source"] = gameMoments.length > 0 ? "box-score" : "news";
@@ -72,20 +73,7 @@ export function getCatchUpBrief(preferences: Preferences, games: Game[], article
     ? [relevantGame.home, relevantGame.away].find((team) => preferences.followedTeamIds.includes(team.id) || followedPlayerTeamIds.has(team.id))
     : !coldStart ? canonicalTeams.find((team) => preferences.followedTeamIds.includes(team.id) || followedPlayerTeamIds.has(team.id)) : undefined;
 
-  let lede = moments.length > 0 ? moments[0].detail : "There are no significant updates for your favorites yet.";
-  if (relevantGame?.homeScore !== undefined && relevantGame.awayScore !== undefined) {
-    if (relevantGame.status === "live") {
-      const period = (relevantGame.period ?? 0) > 4 ? `OT${(relevantGame.period ?? 4) - 4}` : relevantGame.period === 4 ? "the fourth quarter" : `Q${relevantGame.period ?? "—"}`;
-      lede = `${relevantGame.away.short} ${relevantGame.awayScore}, ${relevantGame.home.short} ${relevantGame.homeScore} in ${period}${relevantGame.clock ? ` with ${relevantGame.clock} left` : ""}. ${lede}`;
-    } else {
-      const homeWon = relevantGame.homeScore > relevantGame.awayScore;
-      const winner = homeWon ? relevantGame.home : relevantGame.away;
-      const loser = homeWon ? relevantGame.away : relevantGame.home;
-      const winnerScore = homeWon ? relevantGame.homeScore : relevantGame.awayScore;
-      const loserScore = homeWon ? relevantGame.awayScore : relevantGame.homeScore;
-      lede = `${winner.name} beat ${loser.name} ${winnerScore}–${loserScore}. ${lede}`;
-    }
-  }
+  const lede = gameStory ? gameStory.title : moments[0]?.detail ?? "There are no significant updates for your favorites yet.";
 
   return {
     title: focusTeam ? `${focusTeam.short} catch-up` : coldStart ? "NBA catch-up" : "Your NBA catch-up",
