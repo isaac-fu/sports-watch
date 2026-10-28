@@ -12,7 +12,7 @@ describe("RSS and Atom news", () => {
       const url = String(input);
       if (url.includes("failed")) return new Response("unavailable", { status: 503 });
       if (url.includes("atom")) return new Response(`<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"><title>CBS Sports NBA</title><entry><title>Knicks complete a major trade</title><link href="https://example.com/knicks-trade" rel="alternate"/><updated>2026-10-19T10:00:00Z</updated><summary>New York reshapes its NBA roster.</summary></entry></feed>`, { headers: { "Content-Type": "application/atom+xml" } });
-      return new Response(`<?xml version="1.0"?><rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/"><channel><title>ESPN NBA</title><item><title>Curry scores 40 in Warriors win</title><link>https://example.com/curry</link><pubDate>Sun, 19 Oct 2026 09:00:00 GMT</pubDate><description><![CDATA[Stephen Curry leads Golden State with 40 points.]]></description><media:content url="https://example.com/curry.jpg" type="image/jpeg"/></item></channel></rss>`, { headers: { "Content-Type": "application/rss+xml" } });
+      return new Response(`<?xml version="1.0"?><rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/" xmlns:content="http://purl.org/rss/1.0/modules/content/"><channel><title>ESPN NBA</title><item><title>Curry scores 40 in Warriors win</title><link>https://example.com/curry</link><pubDate>Sun, 19 Oct 2026 09:00:00 GMT</pubDate><description><![CDATA[Stephen Curry leads Golden State with 40 points.]]></description><content:encoded><![CDATA[<article><p>Stephen Curry scored 40 points as Golden State won.</p><p>${"The Warriors controlled the second half with ball movement and timely defense. ".repeat(8)}</p></article>]]></content:encoded><media:content url="https://example.com/curry.jpg" type="image/jpeg"/></item></channel></rss>`, { headers: { "Content-Type": "application/rss+xml" } });
     });
     vi.stubGlobal("fetch", fetchMock);
     const provider = new RssNewsProvider([
@@ -22,7 +22,8 @@ describe("RSS and Atom news", () => {
     ]);
     const articles = await provider.getLatestArticles();
     expect(articles).toHaveLength(2);
-    expect(articles.find((article) => article.url.endsWith("/curry"))).toMatchObject({ source: "ESPN NBA", teamIds: ["gsw"], playerIds: ["stephen-curry"], imageUrl: "https://example.com/curry.jpg" });
+    expect(articles.find((article) => article.url.endsWith("/curry"))).toMatchObject({ source: "ESPN NBA", teamIds: ["gsw"], playerIds: ["stephen-curry"], imageUrl: "https://example.com/curry.jpg", articleTextStatus: "rss-content" });
+    expect(articles.find((article) => article.url.endsWith("/curry"))?.articleText).toContain("controlled the second half");
     expect(articles.find((article) => article.url.endsWith("knicks-trade"))).toMatchObject({ source: "CBS Sports NBA", teamIds: ["nyk"], tags: expect.arrayContaining(["nba", "roster"]) });
   });
 });

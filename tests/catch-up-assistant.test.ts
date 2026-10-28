@@ -43,9 +43,13 @@ describe("catch-up assistant", () => {
       requestBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
       return Response.json({ output: [{ type: "message", content: [{ type: "output_text", text: "It mattered because the run decided the game.", annotations: [] }] }] });
     }));
-    const result = await answerCatchUpQuestion(moment, "Why does this matter?");
+    const article = { id: "moment-1", title: "Late run decides it", summary: "A short summary.", articleText: "Oklahoma City changed the game by switching defensively and then produced five efficient possessions during the decisive 12-2 run.", articleTextStatus: "fetched" as const, source: "NBA Test Wire", publishedAt: "2026-10-19T10:00:00.000Z", url: "https://nba.com/news/late-run", teamIds: ["okc"], playerIds: [], tags: ["nba"] };
+    const result = await answerCatchUpQuestion(moment, "Why does this matter?", { article, relevantStats: ["Oklahoma City: 4-1, 118 points per game."] });
     expect(requestBodies[0]).not.toHaveProperty("tools");
-    expect(result).toMatchObject({ provider: "groq", webSearchUsed: false, citations: [] });
+    expect(result).toMatchObject({ provider: "groq", webSearchUsed: false });
+    expect(JSON.stringify(requestBodies[0])).toContain("switching defensively");
+    expect(JSON.stringify(requestBodies[0])).toContain("118 points per game");
+    expect(result.citations[0]?.url).toBe("https://nba.com/news/late-run");
   });
 
   it("limits freshness searches to trusted domains and returns clickable citation metadata", async () => {

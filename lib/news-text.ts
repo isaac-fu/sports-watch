@@ -32,5 +32,16 @@ export function cleanNewsText(value: string) {
 }
 
 export function cleanNewsArticle(article: NewsArticle): NewsArticle {
-  return { ...article, title: cleanNewsText(article.title), summary: cleanNewsText(article.summary), source: cleanNewsText(article.source) };
+  return {
+    ...article,
+    title: cleanNewsText(article.title),
+    summary: cleanNewsText(article.summary),
+    source: cleanNewsText(article.source),
+    articleText: article.articleText?.replace(/\r/g, "").replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim() || undefined,
+  };
+}
+
+export function publicNewsArticle(article: NewsArticle): NewsArticle {
+  const { articleText: _articleText, articleTextFetchedAt: _articleTextFetchedAt, articleTextStatus: _articleTextStatus, articleTextHash: _articleTextHash, ...publicArticle } = article;
+  return publicArticle;
 }

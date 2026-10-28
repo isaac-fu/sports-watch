@@ -16,10 +16,12 @@ const article = (id: string, publishedAt: string, url = `https://example.com/${i
 
 describe("news cache merging", () => {
   it("retains cached stories, updates duplicates, and sorts newest first", () => {
-    const cached = [article("cached", "2026-10-18T08:00:00.000Z"), article("updated", "2026-10-18T09:00:00.000Z")];
+    const cachedUpdated = { ...article("updated", "2026-10-18T09:00:00.000Z"), articleText: "Previously extracted full article text.", articleTextStatus: "fetched" as const };
+    const cached = [article("cached", "2026-10-18T08:00:00.000Z"), cachedUpdated];
     const fresh = [article("new", "2026-10-18T11:00:00.000Z"), article("updated", "2026-10-18T10:00:00.000Z")];
     const merged = mergeNewsArticles(fresh, cached);
     expect(merged.map((item) => item.id)).toEqual(["new", "updated", "cached"]);
     expect(merged.find((item) => item.id === "updated")?.publishedAt).toBe("2026-10-18T10:00:00.000Z");
+    expect(merged.find((item) => item.id === "updated")?.articleText).toBe("Previously extracted full article text.");
   });
 });

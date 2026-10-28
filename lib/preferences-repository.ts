@@ -1,6 +1,7 @@
 import { loadPreferences, savePreferences } from "./db";
 import { appStore, createDefaultPreferences, defaultAlertPreferences, demoAccountId } from "./store";
 import type { Preferences } from "./models";
+import { normalizeNewsFeedback } from "./news-feedback";
 
 declare global { var __courtsidePreferencesByAccount: Record<string, Preferences> | undefined; }
 
@@ -14,6 +15,7 @@ function normalizePreferences(preferences: Preferences): Preferences {
     followedTeamIds: preferences.followedTeamIds ?? [],
     followedPlayerIds: preferences.followedPlayerIds ?? [],
     alerts: { ...defaultAlertPreferences, ...preferences.alerts },
+    ...(preferences.newsFeedback ? { newsFeedback: normalizeNewsFeedback(preferences.newsFeedback) } : {}),
   };
 }
 
@@ -35,8 +37,11 @@ export async function getCurrentPreferences(accountId = demoAccountId): Promise<
 
 export async function updateCurrentPreferences(accountId: string, preferences: Preferences): Promise<Preferences> {
   if (accountId === demoAccountId) throw new Error("The shared demo profile is read-only.");
-  const normalized = normalizePreferences(preferences);
+  const current = await getCurrentPreferences(accountId);
+  // Feedback can only be changed through the validated article feedback endpoint.
+  const normalized = normalizePreferences({ ...preferences, newsFeedback: current.newsFeedback });
+  const saved = await savePreferences(accountId, normalized);
+  if (!saved && process.env.DATABASE_URL) throw new Error("Unable to save preferences.");
   cachePreferences(accountId, normalized);
-  await savePreferences(accountId, normalized);
   return normalized;
 }

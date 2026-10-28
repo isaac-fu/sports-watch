@@ -23,7 +23,8 @@ export async function PATCH(request: Request) {
   if (body.followedPlayerIds && (!Array.isArray(body.followedPlayerIds) || body.followedPlayerIds.some((id) => !validPlayerIds.has(id)))) return Response.json({ error: "One or more followedPlayerIds are invalid." }, { status: 400 });
 
   const alerts = body.alerts as Partial<AlertPreferences> | undefined;
-  if (alerts && Object.values(alerts).some((value) => typeof value !== "boolean")) return Response.json({ error: "Alert preferences must be boolean values." }, { status: 400 });
+  const alertKeys = new Set(["gameStarting", "closeGame", "finalScore", "standoutPerformance", "injuryUpdate", "leadChange", "milestone"]);
+  if (alerts && Object.entries(alerts).some(([key, value]) => !alertKeys.has(key) || typeof value !== "boolean")) return Response.json({ error: "Alert preferences must use known boolean fields." }, { status: 400 });
 
   const current = await getCurrentPreferences(context.accountId);
   const next = { ...current, ...body, alerts: { ...current.alerts, ...alerts } };

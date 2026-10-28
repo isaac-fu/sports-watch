@@ -11,6 +11,7 @@ from typing import Any, Callable
 
 from fastapi import Body, FastAPI, HTTPException
 from nba_api.stats.endpoints import (
+    boxscoretraditionalv3,
     commonallplayers,
     commonplayerinfo,
     leaguedashplayerstats,
@@ -18,8 +19,11 @@ from nba_api.stats.endpoints import (
     leaguestandingsv3,
     playercareerstats,
     playergamelog,
+    scheduleleaguev2,
 )
 from nba_api.stats.static import teams as static_teams
+from nba_api.live.nba.endpoints import scoreboard as live_scoreboard
+from box_score_mapping import normalize_box_line as _box_line
 
 
 app = FastAPI(title="Sports Watch nba_api provider", version="1.0.0")
@@ -56,6 +60,8 @@ class TtlCache:
 
 
 cache = TtlCache(CACHE_TTL_SECONDS)
+box_cache = TtlCache(30)
+schedule_cache = TtlCache(min(CACHE_TTL_SECONDS, 60))
 request_lock = threading.Lock()
 last_request_at = 0.0
 
@@ -240,6 +246,7 @@ def _player_stat(player: dict[str, Any], season: int, row: dict[str, Any]) -> di
         "turnoversPerGame": _rounded(_number(row, "TOV")),
         "fieldGoalPercentage": _percentage(_number(row, "FG_PCT")),
         "threePointPercentage": _percentage(_number(row, "FG3_PCT")),
+        **({"freeThrowPercentage": _percentage(_number(row, "FT_PCT"))} if row.get("FT_PCT") is not None else {}),
     }
 
 
@@ -464,6 +471,7 @@ def _last_ten(player_id: int, season: int, teams: list[dict[str, Any]]) -> list[
             "turnovers": _integer(row, "TOV"),
             "fieldGoals": f"{_integer(row, 'FGM')}-{_integer(row, 'FGA')}",
             "threePointers": f"{_integer(row, 'FG3M')}-{_integer(row, 'FG3A')}",
+            **({"freeThrows": f"{_integer(row, 'FTM')}-{_integer(row, 'FTA')}"} if row.get("FTM") is not None and row.get("FTA") is not None else {}),
             "plusMinus": _integer(row, "PLUS_MINUS"),
         })
     return games
@@ -479,6 +487,183 @@ def _optional_int(value: Any) -> int | None:
 @app.get("/health")
 def health() -> dict[str, Any]:
     return {"status": "ok", "provider": "nba_api", "cacheTtlSeconds": CACHE_TTL_SECONDS}
+
+
+
+
+def _resolve_nba_game_id(game: dict[str, Any]) -> str:
+    public_id = str(game.get("id") or "")
+    if public_id.startswith("nba-"):
+        native_id = re.fullmatch(r"nba-(\d{10})", public_id)
+        if not native_id:
+            raise ValueError("Expected nba-<10 digit NBA game ID>")
+        return native_id.group(1)
+    home, away = _resolve_team(game["home"]), _resolve_team(game["away"])
+    if not home or not away:
+        raise ValueError("Could not resolve both teams for the box score")
+    # BALLDONTLIE game IDs cannot be used as NBA.com game IDs.
+    date = str(game["date"])[:10]
+    def resolve() -> str:
+        if game.get("status") == "live":
+            board = _nba_request(lambda: live_scoreboard.ScoreBoard(timeout=REQUEST_TIMEOUT_SECONDS))
+            matches = [row for row in board.games.get_dict() if board.score_board_date == date
+                       and int(row["homeTeam"]["teamId"]) == home["id"]
+                       and int(row["awayTeam"]["teamId"]) == away["id"]]
+            if len(matches) != 1:
+                raise ValueError("Could not uniquely match the live game by date and teams")
+            return str(matches[0]["gameId"]).zfill(10)
+        year, month = int(date[:4]), int(date[5:7])
+        season = year if month >= 10 else year - 1
+        for season_type in ("Regular Season", "Playoffs", "Pre Season"):
+            rows = _cached_records(f"game-identity:{date}:{season_type}", lambda: leaguegamelog.LeagueGameLog(
+                player_or_team_abbreviation="T", season=_season_label(season), season_type_all_star=season_type,
+                date_from_nullable=date, date_to_nullable=date, timeout=REQUEST_TIMEOUT_SECONDS,
+            ).league_game_log)
+            home_ids = {str(row["GAME_ID"]) for row in rows if _integer(row, "TEAM_ID") == home["id"]
+                        and _date_iso(row.get("GAME_DATE")) == date and "vs." in str(row.get("MATCHUP", ""))}
+            away_ids = {str(row["GAME_ID"]) for row in rows if _integer(row, "TEAM_ID") == away["id"]
+                        and _date_iso(row.get("GAME_DATE")) == date and "@" in str(row.get("MATCHUP", ""))}
+            matches = home_ids & away_ids
+            if len(matches) == 1:
+                return next(iter(matches)).zfill(10)
+        raise ValueError("Could not uniquely match the game by date and teams")
+    return cache.get_or_load(f"game-identity:{date}:{home['id']}:{away['id']}", resolve)
+
+
+def _box_rows(game: dict[str, Any]) -> dict[str, Any]:
+    game_id = _resolve_nba_game_id(game)
+    def load() -> dict[str, Any]:
+        box = _nba_request(lambda: boxscoretraditionalv3.BoxScoreTraditionalV3(
+            game_id=game_id, timeout=REQUEST_TIMEOUT_SECONDS,
+        ))
+        return {"players": _records(box.player_stats), "teams": _records(box.team_stats)}
+    return box_cache.get_or_load(f"box:{game_id}", load)
+
+
+@app.post("/v1/box-score")
+def box_score(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    try:
+        game = dict(payload["game"])
+        result = {"gameId": game["id"], "source": "nba_api", "status": "pending", "teams": [],
+                  "updatedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}
+        if game.get("status") == "scheduled":
+            return result
+        rows = _box_rows(game)
+        known_players = {str((player.get("providerIds") or {}).get("nba_api")): player["id"]
+                         for player in payload.get("players", [])}
+        for side in ("away", "home"):
+            team = game[side]
+            nba_team = _resolve_team(team)
+            players = []
+            for row in rows["players"]:
+                if _integer(row, "teamId") != nba_team["id"]:
+                    continue
+                line = _box_line(row, f"{row.get('firstName') or ''} {row.get('familyName') or ''}".strip())
+                player_id = known_players.get(str(_integer(row, "personId")))
+                if player_id:
+                    line["playerId"] = player_id
+                players.append(line)
+            totals = next((row for row in rows["teams"] if _integer(row, "teamId") == nba_team["id"]), None)
+            result["teams"].append({"teamId": team["id"], "name": team["name"], "players": players,
+                                    "totals": _box_line(totals, "Team totals") if totals else None})
+        result["status"] = "available" if all(team["players"] for team in result["teams"]) else "unavailable"
+        return result
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"NBA box score request failed: {exc}") from exc
+
+
+def _schedule_rows(season: int) -> list[dict[str, Any]]:
+    # Cache the league schedule once, shared by all team and single-game requests.
+    return schedule_cache.get_or_load(f"schedule:{season}", lambda: _records(_nba_request(
+        lambda: scheduleleaguev2.ScheduleLeagueV2(
+            league_id="00", season=_season_label(season), timeout=REQUEST_TIMEOUT_SECONDS,
+        ).season_games
+    )))
+
+
+def _schedule_game(row: dict[str, Any], teams: list[dict[str, Any]]) -> dict[str, Any] | None:
+    mapped = {}
+    for side in ("home", "away"):
+        nba_id = _integer(row, f"{side}Team_teamId")
+        short = str(row.get(f"{side}Team_teamTricode") or "").upper()
+        team = next((team for team in teams if _provider_id(team) == nba_id and nba_id), None)
+        team = team or next((team for team in teams if short and str(team.get("short") or "").upper() == short), None)
+        if not team:
+            return None  # Unresolved NBA Cup opponents are not canonical teams yet.
+        mapped[side] = {**team, "providerIds": {**(team.get("providerIds") or {}), "nba_api": str(nba_id)}}
+    raw_id = str(row.get("gameId") or "")
+    if not re.fullmatch(r"\d{1,10}", raw_id):
+        return None
+    date_text = str(row.get("gameDateEst") or row.get("gameDate") or "")
+    try:
+        game_date = datetime.fromisoformat(date_text.replace("Z", "+00:00")).date().isoformat()
+    except ValueError:
+        try:
+            game_date = datetime.strptime(date_text[:10], "%m/%d/%Y").date().isoformat()
+        except ValueError:
+            return None
+    status = {2: "live", 3: "final"}.get(_integer(row, "gameStatus"), "scheduled")
+    status_text = str(row.get("gameStatusText") or "").strip()
+    networks = list(dict.fromkeys(str(value) for key, value in row.items()
+                                 if key.startswith("national") and key.endswith("broadcasterDisplay") and value))
+    game = {"id": f"nba-{raw_id.zfill(10)}", "date": game_date,
+            "time": status_text or ("Final" if status == "final" else "TBD"),
+            "network": ", ".join(networks) or "NBA", "venue": str(row.get("arenaName") or ""),
+            "status": status, **mapped,
+            "updatedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}
+    if status != "scheduled" and row.get("homeTeam_score") is not None and row.get("awayTeam_score") is not None:
+        game.update(homeScore=_integer(row, "homeTeam_score"), awayScore=_integer(row, "awayTeam_score"))
+    if row.get("gameDateTimeUTC") and not re.search(r"TBD|PPD|postponed", status_text, re.I):
+        try:
+            starts = datetime.fromisoformat(str(row["gameDateTimeUTC"]).replace("Z", "+00:00"))
+            game["startsAt"] = starts.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
+        except ValueError:
+            pass
+    return game
+
+
+@app.post("/v1/team-games")
+@app.post("/v1/games")
+def team_games(payload: dict[str, Any] = Body(...)) -> list[dict[str, Any]]:
+    try:
+        start = datetime.strptime(str(payload["from"]), "%Y-%m-%d").date()
+        end = datetime.strptime(str(payload["to"]), "%Y-%m-%d").date()
+        if end < start or (end - start).days > 366:
+            raise ValueError("Expected an ordered date range of at most 366 days")
+        teams = list(payload.get("teams") or [])
+        team_id = payload.get("teamId")
+        if team_id is not None and not any(team.get("id") == team_id for team in teams):
+            raise ValueError("Unknown canonical team")
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        first = start.year if start.month >= 10 else start.year - 1
+        last = end.year if end.month >= 10 else end.year - 1
+        games = {}
+        for season in range(first, last + 1):
+            for row in _schedule_rows(season):
+                game = _schedule_game(row, teams)
+                if game and start.isoformat() <= game["date"] <= end.isoformat() and (team_id is None or team_id in (game["home"]["id"], game["away"]["id"])):
+                    games[game["id"]] = game
+        return sorted(games.values(), key=lambda game: (game["date"], game.get("startsAt", ""), game["id"]))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"NBA schedule request failed: {exc}") from exc
+
+
+@app.post("/v1/game")
+def get_game(payload: dict[str, Any] = Body(...)) -> dict[str, Any] | None:
+    match = re.fullmatch(r"nba-(\d{10})", str(payload.get("gameId") or ""))
+    if not match:
+        raise HTTPException(status_code=400, detail="Expected nba-<10 digit NBA game ID>")
+    game_id = match.group(1)
+    # NBA IDs encode the season start in positions 3-4, including playoffs.
+    year = int(game_id[3:5])
+    season = 1900 + year if year >= 46 else 2000 + year
+    try:
+        row = next((row for row in _schedule_rows(season) if str(row.get("gameId") or "").zfill(10) == game_id), None)
+        return _schedule_game(row, list(payload.get("teams") or [])) if row else None
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"NBA game request failed: {exc}") from exc
 
 
 @app.post("/v1/catalog")
@@ -544,7 +729,7 @@ def team_standings(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
             mapped = []
             for team in teams:
                 row = _find_team_row(team, rows)
-                if row and _integer(row, "WINS", "W") + _integer(row, "LOSSES", "L") > 0:
+                if row:
                     mapped.append(_team_stat(team, season, row))
             if mapped:
                 return {"season": season, "teams": mapped}

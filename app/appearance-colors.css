@@ -1,0 +1,25 @@
+.appearance-colors { border-top: 1px solid var(--line); margin-top: 24px; padding-top: 20px; max-width: 600px; }
+.appearance-colors p { color: var(--muted); font-size: 12px; line-height: 1.6; }
+.appearance-colors-fields, .appearance-colors-presets { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; margin: 16px 0; }
+.appearance-colors label { display: grid; gap: 8px; font-size: 12px; }
+.appearance-colors input, .appearance-colors button { border: 1px solid var(--line); border-radius: 6px; background: var(--panel-raised); color: var(--ink); padding: 9px; }
+.appearance-colors input[type=color] { width: 90px; height: 40px; padding: 3px; cursor: pointer; }
+.appearance-colors input[type=text] { width: 110px; }
+.appearance-colors button { font-size: 12px; cursor: pointer; }
+.appearance-colors button[aria-pressed=true] { outline: 2px solid var(--gold); }
+.appearance-colors-presets span { width: 12px; height: 12px; display: inline-block; border-radius: 50%; margin-right: 7px; }
+:root[data-accent-color] { --gold: var(--sw-accent-text); --blue: var(--sw-accent-text); --canvas: var(--sw-accent-canvas); --panel: var(--sw-accent-panel); --panel-raised: var(--sw-accent-raised); --line: var(--sw-accent-line); }
+:root[data-accent-color] body { background: var(--canvas); }
+:root[data-accent-color] :is(.sidebar, .topbar, .catch-up-modal, .auth-modal, .onboarding-modal, .notification-panel, .game-center-panel) { background: var(--panel); }
+:root[data-accent-color] :is(.feed-card, .game-card, .feed-icon, .alert-icon, .catch-up-slide, .entity-search, .assistant-prompts button, .catch-up-assistant textarea, .nav-item.active, .mobile-nav button.active) { background: var(--panel-raised); }
+:root[data-accent-color] :is(.catch-up-button, .modal-action, .auth-submit, .catch-up-navigation button:last-child, .catch-up-assistant form button, .settings-form > button, .settings-signin button, .game-scope-options button.active, .profile-follow:not(.following), .article-save:not(.saved)) { background: var(--sw-accent-selected); color: var(--sw-accent-foreground); }
+:root[data-accent-color] :is(.preference-bubble.selected, .calendar-day.selected) { background: var(--sw-accent-soft); }
+:root[data-accent-color] :focus-visible { outline-color: var(--sw-accent-text); }
+.news-interest { position: relative; margin-left: auto; font-size: 11px; color: var(--muted); }
+.news-interest summary { cursor: pointer; list-style: none; padding: 2px 10px; font-size: 22px; border-radius: 5px; }
+.news-interest summary::-webkit-details-marker { display: none; }
+.news-interest-options { position: absolute; right: 0; top: 100%; z-index: 3; display: grid; gap: 6px; width: 210px; padding: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px #0005; }
+.news-interest-options button { background: var(--panel-raised); border: 1px solid var(--line); color: var(--ink); text-align: left; padding: 9px; border-radius: 4px; }
+.news-interest-options button:disabled { opacity: .5; }
+.news-interest small { display: block; line-height: 1.5; }
+.catch-up-slide > .news-interest { float: right; }

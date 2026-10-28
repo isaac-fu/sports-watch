@@ -71,6 +71,10 @@ CREATE TABLE IF NOT EXISTS news_articles (
   team_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
   player_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
   tags JSONB NOT NULL DEFAULT '[]'::jsonb,
+  article_text TEXT,
+  article_text_fetched_at TIMESTAMPTZ,
+  article_text_status TEXT NOT NULL DEFAULT 'not-attempted',
+  article_text_hash TEXT,
   provider TEXT NOT NULL,
   synced_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

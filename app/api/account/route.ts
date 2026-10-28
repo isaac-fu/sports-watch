@@ -29,6 +29,7 @@ export async function PATCH(request: Request) {
   }
   if (newPassword !== undefined && (newPassword.length < 8 || newPassword.length > 128)) return Response.json({ error: "New password must be between 8 and 128 characters." }, { status: 400 });
   if (newPassword !== undefined && !currentPassword) return Response.json({ error: "Enter your current password." }, { status: 400 });
+  if (currentPassword !== undefined && currentPassword.length > 128) return Response.json({ error: "Current password is incorrect." }, { status: 400 });
   if (displayName === undefined && timezone === undefined && newPassword === undefined) return Response.json({ error: "No account changes were provided." }, { status: 400 });
 
   try {
@@ -37,7 +38,11 @@ export async function PATCH(request: Request) {
       const verification = await createEmailVerification(account.id, "password-change");
       const baseUrl = process.env.APP_BASE_URL?.trim() || new URL(request.url).origin;
       const verificationUrl = new URL(`/api/auth/verify-email?token=${encodeURIComponent(verification.token)}`, baseUrl).toString();
-      const delivery = await sendVerificationEmail({ to: account.email, displayName: account.displayName, verificationUrl, purpose: "password-change" });
+      const delivery = await sendVerificationEmail({ to: account.email, displayName: account.displayName, verificationUrl, purpose: "password-change" }).catch(() => null);
+      if (!delivery) return Response.json({
+        error: "Password changed, but the verification message could not be delivered. Sign in with your new password to retry verification.",
+        meta: { verificationRequired: true, signedOut: true },
+      }, { status: 503, headers: { "Cache-Control": "no-store", "Set-Cookie": clearedSessionCookie() } });
       return Response.json({ data: account, meta: { verificationRequired: true, signedOut: true, emailProvider: delivery.provider, previewUrl: delivery.previewUrl } }, { headers: { "Cache-Control": "no-store", "Set-Cookie": clearedSessionCookie() } });
     }
     return Response.json({ data: account, meta: { verificationRequired: false } }, { headers: { "Cache-Control": "no-store" } });

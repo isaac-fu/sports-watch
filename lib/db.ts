@@ -1,5 +1,6 @@
 import { Pool } from "pg";
 import type { Account, Preferences } from "./models";
+import { normalizeNewsFeedback } from "./news-feedback";
 
 declare global { var __courtsidePool: Pool | undefined; }
 
@@ -24,7 +25,10 @@ export async function loadPreferences(accountId: string): Promise<Preferences | 
   try {
     const result = await pool.query("SELECT followed_team_ids, followed_player_ids, alerts FROM account_preferences WHERE account_id = $1", [accountId]);
     const row = result.rows[0];
-    return row ? { followedTeamIds: row.followed_team_ids, followedPlayerIds: row.followed_player_ids, alerts: row.alerts } : null;
+    if (!row) return null;
+    const { __newsFeedback, ...alerts } = row.alerts ?? {};
+    return { followedTeamIds: row.followed_team_ids, followedPlayerIds: row.followed_player_ids, alerts,
+      ...(__newsFeedback ? { newsFeedback: normalizeNewsFeedback(__newsFeedback) } : {}) };
   } catch { return null; }
 }
 
@@ -38,7 +42,8 @@ export async function savePreferences(accountId: string, preferences: Preference
       ON CONFLICT (account_id) DO UPDATE SET
         followed_team_ids = EXCLUDED.followed_team_ids,
         followed_player_ids = EXCLUDED.followed_player_ids,
-        alerts = EXCLUDED.alerts,
+        alerts = EXCLUDED.alerts || CASE WHEN account_preferences.alerts ? '__newsFeedback'
+          THEN jsonb_build_object('__newsFeedback', account_preferences.alerts->'__newsFeedback') ELSE '{}'::jsonb END,
         updated_at = NOW()
     `, [accountId, JSON.stringify(preferences.followedTeamIds), JSON.stringify(preferences.followedPlayerIds), JSON.stringify(preferences.alerts)]);
     return true;

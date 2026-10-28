@@ -43,6 +43,8 @@ describe("BALLDONTLIE stats provider", () => {
       fga: 18,
       fg3m: 4,
       fg3a: 9,
+      ftm: 5,
+      fta: 6,
       reb: 5,
       ast: 7,
       stl: 1,
@@ -68,7 +70,7 @@ describe("BALLDONTLIE stats provider", () => {
       const url = new URL(String(input));
       if (url.pathname.endsWith("/players/115")) return Response.json({ data: providerPlayer });
       if (url.pathname.endsWith("/season_averages/general")) {
-        return Response.json({ data: [{ player: providerPlayer, team: providerPlayer.team, stats: { gp: 1, pts: 30, reb: 5, ast: 7, stl: 1, blk: 0, tov: 2, fg_pct: .48, fg3_pct: .42 } }] });
+        return Response.json({ data: [{ player: providerPlayer, team: providerPlayer.team, stats: { gp: 1, pts: 30, reb: 5, ast: 7, stl: 1, blk: 0, tov: 2, fg_pct: .48, fg3_pct: .42, ft_pct: .833 } }] });
       }
       if (url.pathname.endsWith("/stats")) {
         statsRequests.push(url);
@@ -82,6 +84,8 @@ describe("BALLDONTLIE stats provider", () => {
     const profile = await provider.getPlayerProfile(curry, 2026);
 
     expect(profile.lastTenGames).toHaveLength(10);
+    expect(profile.lastTenGames[0].freeThrows).toBe("5-6");
+    expect(profile.currentSeason?.freeThrowPercentage).toBe(83.3);
     expect(profile.lastTenGames.every((game) => game.season === 2025)).toBe(true);
     expect(profile.lastTenGames[0]).toMatchObject({ opponentShort: "LAL", result: "W", points: 27 });
     expect(statsRequests[0].searchParams.getAll("seasons[]")).toEqual(["2026", "2025"]);

@@ -1,13 +1,17 @@
 import type { AlertCandidate, CatchUpMoment, FeedItem } from "@/lib/models";
+import { newsFeedbackAdjustment } from "@/lib/news-feedback";
 import type { GameCandidate, GameEventCandidate, GameRecommendation, NewsCandidate, PlayerCandidate, PlayerRecommendation, TeamCandidate, TeamRecommendation } from "./types";
 
 export function rankNewsCandidates(candidates: NewsCandidate[]): FeedItem[] {
-  const ranked = candidates.map(({ article, matchedPlayers, matchedTeams, freshnessHours, importanceScore, sourceQualityScore, savedInterestScore, sources }) => {
+  const eligible = candidates.filter(({ feedback }) => !feedback?.excluded && (feedback?.articleScore || (feedback?.topicScore ?? 0) > -30));
+  const adjustments = new Map(eligible.map((candidate) => [candidate.article.id, newsFeedbackAdjustment(candidate.feedback, "feed")]));
+  const ranked = eligible.map(({ article, matchedPlayers, matchedTeams, freshnessHours, importanceScore, sourceQualityScore, savedInterestScore, sources }) => {
     const freshnessScore = Math.max(0, 15 - Math.floor(freshnessHours));
     const coldStart = sources.includes("popular-league-update");
-    const relevanceScore = Math.min(100, coldStart
+    const baseScore = Math.min(100, coldStart
       ? freshnessScore + importanceScore * 3 + sourceQualityScore * 2
       : matchedPlayers.length * 45 + matchedTeams.length * 25 + savedInterestScore + freshnessScore + importanceScore + sourceQualityScore);
+    const relevanceScore = Math.max(0, Math.min(100, baseScore + (adjustments.get(article.id) ?? 0)));
     const isPerformance = article.tags.includes("performance");
     const isInjury = article.tags.includes("injury");
     const reason = matchedPlayers.length > 0
@@ -30,7 +34,8 @@ export function rankNewsCandidates(candidates: NewsCandidate[]): FeedItem[] {
       reason,
       relevanceScore,
     };
-  }).sort((left, right) => new Date(right.publishedAt).getTime() - new Date(left.publishedAt).getTime() || right.relevanceScore - left.relevanceScore);
+  }).sort((left, right) => new Date(right.publishedAt).getTime() - new Date(left.publishedAt).getTime()
+    || right.relevanceScore - left.relevanceScore || left.id.localeCompare(right.id));
 
   const seenTitles = new Set<string>();
   return ranked.filter((item) => {
@@ -42,9 +47,10 @@ export function rankNewsCandidates(candidates: NewsCandidate[]): FeedItem[] {
 }
 
 export function rankCatchUpCandidates(candidates: NewsCandidate[], limit = 3): CatchUpMoment[] {
-  return candidates.map((candidate) => {
+  return candidates.filter(({ feedback }) => !feedback?.excluded && (feedback?.articleScore || (feedback?.topicScore ?? 0) > -18)).map((candidate) => {
     const freshnessScore = Math.max(0, 12 - Math.floor(candidate.freshnessHours));
-    const importanceScore = Math.min(100, candidate.matchedPlayers.length * 35 + candidate.matchedTeams.length * 25 + candidate.importanceScore * 2 + freshnessScore);
+    const baseScore = Math.min(100, candidate.matchedPlayers.length * 35 + candidate.matchedTeams.length * 25 + candidate.importanceScore * 2 + freshnessScore);
+    const importanceScore = Math.max(0, Math.min(100, baseScore + newsFeedbackAdjustment(candidate.feedback, "catchup")));
     const reason = candidate.article.tags.includes("injury")
       ? "Important availability update"
       : candidate.article.tags.includes("performance")
@@ -53,7 +59,7 @@ export function rankCatchUpCandidates(candidates: NewsCandidate[], limit = 3): C
           ? `Relevant to ${candidate.matchedPlayers[0].name}`
           : "Key development for a team you follow";
     return { id: candidate.article.id, title: candidate.article.title, detail: candidate.article.summary, reason, importanceScore, source: "news" as const };
-  }).sort((left, right) => right.importanceScore - left.importanceScore).slice(0, limit);
+  }).sort((left, right) => right.importanceScore - left.importanceScore || left.id.localeCompare(right.id)).slice(0, limit);
 }
 
 export function rankGameEventCandidates(candidates: GameEventCandidate[], limit = 3): CatchUpMoment[] {

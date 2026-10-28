@@ -1,0 +1,20 @@
+.leaderboard-page { min-width: 0; max-width: 1200px; }
+.leaderboard-panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 22px; margin-bottom: 24px; min-width: 0; }
+.leaderboard-panel h2 { font-size: 20px; margin: 0 0 10px; }
+.leaderboard-panel p { color: var(--muted); font-size: 12px; line-height: 1.6; }
+.leaderboard-scroll { overflow: auto; max-height: 600px; overscroll-behavior: contain; }
+.leaderboard-scroll table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12px; white-space: nowrap; }
+.leaderboard-scroll th, .leaderboard-scroll td { padding: 13px 12px; border-bottom: 1px solid var(--line); text-align: right; }
+.leaderboard-scroll th:nth-child(2), .leaderboard-scroll th[scope=row] { text-align: left; }
+.leaderboard-scroll thead th { position: sticky; top: 0; background: var(--panel-raised); z-index: 1; }
+.leaderboard-scroll button { background: transparent; border: 0; color: var(--gold); font: inherit; cursor: pointer; padding: 0; text-align: inherit; }
+.leaderboard-scroll small { display: block; color: var(--muted); font-weight: 400; font-size: 10px; margin-top: 5px; }
+.leaderboard-scroll .selected-player { background: var(--panel-raised); outline: 1px solid var(--gold); outline-offset: -1px; }
+.leaderboard-scroll .selected-stat { font-weight: 700; color: var(--gold); }
+.leaderboard-search { display: grid; gap: 7px; max-width: 360px; margin: 20px 0; color: var(--muted); font-size: 12px; }
+.leaderboard-search input { background: var(--panel-raised); border: 1px solid var(--line); border-radius: 6px; color: var(--ink); padding: 11px; width: 100%; }
+.player-stat-grid .player-stat-link { display: flex; flex-direction: column; align-items: flex-start; background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 8px; text-align: left; color: inherit; cursor: pointer; }
+.player-stat-grid .player-stat-link:hover, .player-stat-grid .player-stat-link:focus-visible { background: var(--panel-raised); border-color: var(--gold); }
+.player-stat-grid .player-stat-link strong { font-size: 23px; }
+.player-stat-grid .player-stat-link span, .player-stat-grid .player-stat-link small { display: block; margin-top: 5px; color: var(--muted); font-size: 10px; }
+@media (max-width: 760px) { .leaderboard-panel { padding: 14px; } }

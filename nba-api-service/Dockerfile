@@ -8,7 +8,7 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 RUN addgroup --system app && adduser --system --ingroup app app
-COPY --chown=app:app app.py ./
+COPY --chown=app:app app.py box_score_mapping.py ./
 
 USER app
 EXPOSE 8000

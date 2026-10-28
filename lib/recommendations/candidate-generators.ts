@@ -2,6 +2,7 @@ import type { AlertCandidate, Game, GameCenter, NewsArticle, Player, Preferences
 import { canonicalPlayers } from "@/lib/catalog";
 import { formatPacificTipTime, scheduledGameTimestamp } from "@/lib/game-time";
 import { classifyNewsText } from "@/lib/news-classifier";
+import { newsFeedbackSignals, normalizeNewsFeedback } from "@/lib/news-feedback";
 import type { GameCandidate, GameEventCandidate, NewsCandidate, PlayerCandidate, RecommendationInputs, TeamCandidate } from "./types";
 
 const nationallyVisible = (game: Game) => ["ABC", "ESPN", "TNT", "NBA TV"].includes(game.network.toUpperCase());
@@ -15,12 +16,15 @@ function importanceFor(article: NewsArticle) {
 }
 
 export function generateNewsCandidates(articles: NewsArticle[], teams: Team[], players: Player[], preferences: Preferences, savedArticles: SavedArticle[] = []): NewsCandidate[] {
+  const newsFeedback = normalizeNewsFeedback(preferences.newsFeedback);
   const savedIds = new Set(savedArticles.map((article) => article.id));
   const savedTeamIds = new Set(savedArticles.flatMap((article) => article.teamIds));
   const savedPlayerIds = new Set(savedArticles.flatMap((article) => article.playerIds));
   const coldStart = preferences.followedTeamIds.length === 0 && preferences.followedPlayerIds.length === 0 && savedArticles.length === 0;
   return articles.flatMap((article) => {
     if (savedIds.has(article.id)) return [];
+    const feedback = newsFeedbackSignals(article, newsFeedback);
+    if (feedback.excluded) return [];
     const inferred = classifyNewsText([article.title, article.summary, article.source, article.url], teams, players);
     const articleTeamIds = new Set([...article.teamIds, ...inferred.teamIds]);
     const articlePlayerIds = new Set([...article.playerIds, ...inferred.playerIds]);
@@ -31,6 +35,7 @@ export function generateNewsCandidates(articles: NewsArticle[], teams: Team[], p
       + Array.from(articlePlayerIds).filter((id) => savedPlayerIds.has(id)).length * 30;
     const importanceScore = importanceFor(article);
     const sources: NewsCandidate["sources"] = [];
+    if (feedback.articleScore > 0 || feedback.topicScore > 0) sources.push("explicit-interest");
     if (matchedTeams.length) sources.push("followed-team");
     if (matchedPlayers.length) sources.push("followed-player");
     if (savedInterestScore > 0) sources.push("saved-interest");
@@ -39,6 +44,7 @@ export function generateNewsCandidates(articles: NewsArticle[], teams: Team[], p
     if (sources.length === 0) return [];
 
     return [{
+      feedback,
       article: { ...article, teamIds: Array.from(articleTeamIds), playerIds: Array.from(articlePlayerIds) },
       matchedTeams,
       matchedPlayers,

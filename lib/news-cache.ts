@@ -7,7 +7,16 @@ const publishedTime = (article: NewsArticle) => {
 
 export function mergeNewsArticles(fresh: NewsArticle[], cached: NewsArticle[], limit = 100) {
   const byId = new Map(cached.map((article) => [article.id, article]));
-  fresh.forEach((article) => byId.set(article.id, article));
+  fresh.forEach((article) => {
+    const previous = byId.get(article.id);
+    byId.set(article.id, {
+      ...article,
+      articleText: article.articleText ?? previous?.articleText,
+      articleTextFetchedAt: article.articleTextFetchedAt ?? previous?.articleTextFetchedAt,
+      articleTextStatus: article.articleTextStatus === "rss-content" ? "rss-content" : previous?.articleTextStatus ?? article.articleTextStatus,
+      articleTextHash: article.articleTextHash ?? previous?.articleTextHash,
+    });
+  });
 
   const seenUrls = new Set<string>();
   return Array.from(byId.values())

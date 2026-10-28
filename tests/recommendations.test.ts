@@ -52,7 +52,7 @@ describe("recommendation ranking", () => {
 
   it("falls back to current league stories when no article matches a followed entity", () => {
     const articles: NewsArticle[] = [
-      { id: "league-story", title: "League-wide update", summary: "The latest NBA news.", source: "League Wire", publishedAt: "2026-10-19T10:00:00.000Z", url: "https://example.com/league", teamIds: ["bos"], playerIds: ["jayson-tatum"], tags: ["nba"] },
+      { id: "league-story", title: "League-wide update", summary: "The latest NBA news.", source: "League Wire", publishedAt: new Date().toISOString(), url: "https://example.com/league", teamIds: ["bos"], playerIds: ["jayson-tatum"], tags: ["nba"] },
     ];
     const feed = getPersonalizedFeed(preferences, articles);
     expect(feed).toHaveLength(1);

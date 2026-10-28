@@ -5,6 +5,7 @@ import { getStatsProvider } from "./providers";
 import { mockStatsProvider } from "./providers/stats-provider";
 import { currentNbaSeasonStart } from "./season";
 import { calculatePlayerMetricRankings } from "./player-rankings";
+import { getLeagueStats } from "./league-stats-service";
 
 type CachedProfile = { profile: PlayerProfile; expiresAt: number };
 
@@ -28,8 +29,9 @@ export async function getPlayerProfile(playerId: string): Promise<PlayerProfile 
   let leagueStats = null;
   try {
     profile = await provider.getPlayerProfile(player, season);
-    if (profile.currentSeason) leagueStats = await provider.getSeasonStats(season).catch(() => null);
+    if (profile.currentSeason) leagueStats = await getLeagueStats(season).catch(() => null);
   } catch {
+    if (provider.name !== "mock-repository") throw new Error("Player statistics are temporarily unavailable.");
     profile = await mockStatsProvider.getPlayerProfile(player, season);
     leagueStats = await mockStatsProvider.getSeasonStats(season);
   }

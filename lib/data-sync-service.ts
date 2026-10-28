@@ -7,6 +7,7 @@ import { mockNewsProvider } from "./providers/news-provider";
 import { mockStatsProvider } from "./providers/stats-provider";
 import { currentNbaSeasonStart } from "./season";
 import { mergeNewsArticles } from "./news-cache";
+import { enrichNewsArticles } from "./article-enrichment";
 
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : "Unknown provider error";
 
@@ -37,7 +38,8 @@ export async function syncNews(): Promise<SyncResult> {
     const freshArticles = await selected.getLatestArticles();
     if (freshArticles.length === 0) throw new Error(`${selected.name} returned no NBA articles.`);
     const cachedArticles = existing.source === selected.name ? existing.articles : [];
-    const articles = mergeNewsArticles(freshArticles, cachedArticles);
+    const mergedArticles = mergeNewsArticles(freshArticles, cachedArticles);
+    const articles = selected.name === mockNewsProvider.name ? mergedArticles : await enrichNewsArticles(mergedArticles);
     await saveNewsArticles(articles, selected.name);
     return { domain: "news", provider: selected.name, status: "success", itemCount: articles.length, syncedAt };
   } catch (error) {

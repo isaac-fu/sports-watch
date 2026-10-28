@@ -1,8 +1,9 @@
 import type { ProviderCatalog } from "@/lib/catalog";
 import { canonicalPlayers, canonicalTeams } from "@/lib/catalog";
-import type { Player, PlayerProfile, Team, TeamStat } from "@/lib/models";
+import type { Game, GameEvent, Player, PlayerProfile, Team, TeamStat } from "@/lib/models";
+import type { GameBoxScore } from "@/lib/box-score";
 import { currentNbaSeasonStart } from "@/lib/season";
-import type { CatalogProvider } from "./types";
+import type { CatalogProvider, GameFilters } from "./types";
 import type { SeasonStats, StatsProvider, TeamStandingsSnapshot } from "./stats-provider";
 
 type NbaApiOptions = {
@@ -72,9 +73,52 @@ export class NbaApiProvider implements CatalogProvider, StatsProvider {
     return this.request<TeamStat | null>("/v1/team-stats", { season, team });
   }
 
+  async getTeamGames(team: Team, from: string, to: string): Promise<Game[]> {
+    const games = await this.request<Game[]>("/v1/team-games", {
+      teamId: team.id, from, to, teams: canonicalTeams,
+    });
+    if (!Array.isArray(games) || games.some((game) => !/^nba-\d{10}$/.test(game.id)
+      || !game.home || !game.away || (game.home.id !== team.id && game.away.id !== team.id))) {
+      throw new Error("nba_api returned invalid team games.");
+    }
+    return games;
+  }
+
+  async getGames(filters: GameFilters = {}): Promise<Game[]> {
+    const from = filters.from ?? new Date().toISOString().slice(0, 10);
+    const to = filters.to ?? new Date(Date.parse(`${from}T00:00:00Z`) + 7 * 86_400_000).toISOString().slice(0, 10);
+    if (filters.teamId) {
+      const team = canonicalTeams.find((team) => team.id === filters.teamId);
+      if (!team) throw new Error("NBA schedule requests require a canonical team.");
+      return this.getTeamGames(team, from, to);
+    }
+    const games = await this.request<Game[]>("/v1/games", { from, to, teams: canonicalTeams });
+    if (!Array.isArray(games) || games.some((game) => !/^nba-\d{10}$/.test(game.id) || !game.home || !game.away)) {
+      throw new Error("nba_api returned invalid games.");
+    }
+    return games;
+  }
+
+  async getGame(gameId: string): Promise<Game | null> {
+    if (!/^nba-\d{10}$/.test(gameId)) return null;
+    const game = await this.request<Game | null>("/v1/game", { gameId, teams: canonicalTeams });
+    if (game && (game.id !== gameId || !game.home || !game.away)) throw new Error("nba_api returned an invalid game.");
+    return game;
+  }
+
+  async getGameEvents(_gameId: string): Promise<GameEvent[]> {
+    throw new Error("NBA play-by-play is not available from the schedule service.");
+  }
+
   async getTeamStandings(season: number): Promise<TeamStandingsSnapshot> {
     const standings = await this.request<TeamStandingsSnapshot>("/v1/team-standings", { season, teams: canonicalTeams });
     if (!Number.isInteger(standings.season) || !Array.isArray(standings.teams)) throw new Error("nba_api returned invalid team standings.");
     return standings;
+  }
+
+  async getBoxScore(game: Game): Promise<GameBoxScore> {
+    const box = await this.request<GameBoxScore>("/v1/box-score", { game, players: canonicalPlayers });
+    if (box.gameId !== game.id || !Array.isArray(box.teams)) throw new Error("nba_api returned an invalid box score.");
+    return box;
   }
 }

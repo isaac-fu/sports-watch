@@ -2,6 +2,16 @@
 
 Sports Watch is a personalized NBA companion: follow the teams and players you care about, see a focused feed, monitor a live game, and catch up on what you missed.
 
+## Personalized catch-up and appearance
+
+- Catch Me Up leads with the game result and score differential, then ranks box-score accomplishments (multi-stat feats, exceptional performances, and team leaders). It fills remaining slots with current news, never subscription-only play-by-play. Missing statistics are not invented.
+- News cards and news recap slides have a three-dot Interested / Not interested menu. Signed-in preferences persist per account, exclude rejected articles, and influence topic selection more strongly in Catch Me Up. Betting is learned separately from incidental injury or performance references. The feed remains newest-first.
+- Team-profile recent/upcoming games use the Python NBA service outside demo mode. Its league schedule cache is shared across teams (up to 60 seconds), and native NBA game IDs route directly to NBA game/box-score lookups. NBA endpoints can still throttle or time out; this is not an availability guarantee.
+- Settings → Appearance includes custom accent colors, presets, a hex input, and reset. The choice persists on the device and coordinates dark surfaces; text colors adjust for contrast.
+- No additional environment variables are required. Keep the existing NBA service running. Real verification emails require the existing Resend configuration; console preview links are deliberately disabled in production.
+
+Regression checks: `npm test`, `npm run lint`, `npx tsc --noEmit`, and `scripts/verify-game-navigation.mjs` with Playwright. Python schedule fixtures are in `nba-api-service/test_schedule_mapping.py` and run in the NBA service environment.
+
 ## Run locally
 
 ```bash
@@ -68,6 +78,12 @@ docker compose up -d --build
 ```
 
 Compose makes the service available to the web container at `http://nba-api:8000` and to the host at `http://localhost:8001`. Its health endpoint is `GET /health`. No NBA API key is required.
+
+The Schedule calendar loads a month at a time and supports the previous 12 months through the coming June. Both calendar games and Home matchups open a game detail view. Completed games display their final score; box scores show player minutes, scoring, rebounds, assists, shooting, defensive stats, turnovers, fouls, and plus/minus. Roster links open the same player profiles used in My players, with a Back button returning to the originating team.
+
+Schedule results are cached in the browser tab (up to 36 ranges) and API process (up to 100 provider/filter combinations), with concurrent requests sharing a single load. Current/live ranges expire after 30 seconds, future or incomplete ranges after 5 minutes, and completed historical ranges after 1 hour. The visible Schedule checks for expired entries every 30 seconds and on tab return; hidden tabs do not poll. Cached games remain visible during refreshes or provider outages, with a warning when stale. Fallback entries are limited to 24 hours. These are in-memory caches, so browser reloads/server restarts clear their respective caches; no environment changes are needed.
+
+Box scores use `STATS_DATA_PROVIDER`. With `nba_api`, the service resolves BALLDONTLIE games by date and both teams, then requests `BoxScoreTraditionalV3`. With `balldontlie`, it requests game stats (subject to your API plan). Missing stats stay blank, and unavailable box scores never fall back to invented numbers. Rebuild the Python service after updating its source: `docker compose up -d --build nba-api`. Rebuild `web` as well if you run the UI in Docker.
 
 For `npm run dev` outside Docker, start the Python service separately and keep `NBA_API_SERVICE_URL=http://localhost:8001`:
 

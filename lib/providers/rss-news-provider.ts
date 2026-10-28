@@ -90,6 +90,8 @@ function mapEntry(entry: XmlRecord, source: RssFeedSource, feedTitle: string): N
   if (!title || !url || !publishedAt) return null;
   const rawSummary = textValue(entry.description ?? entry.summary ?? entry["content:encoded"] ?? entry.content);
   const summary = stripHtml(rawSummary).slice(0, 600) || "Open the article for the full story.";
+  const embeddedText = stripHtml(textValue(entry["content:encoded"] ?? entry.content));
+  const articleText = embeddedText.length >= 400 && embeddedText.length > summary.length * 1.25 ? embeddedText.slice(0, 18_000) : undefined;
   const publisher = decodeHtmlEntities(source.name || feedTitle || textValue(entry.source) || sourceHost(url));
   const classified = classifyAndTagNews([title, summary, publisher, url], canonicalTeams, canonicalPlayers);
   if (!source.trustedNba && !classified.nbaRelated) return null;
@@ -104,6 +106,10 @@ function mapEntry(entry: XmlRecord, source: RssFeedSource, feedTitle: string): N
     teamIds: classified.teamIds,
     playerIds: classified.playerIds,
     tags: classified.tags,
+    articleText,
+    articleTextFetchedAt: articleText ? new Date().toISOString() : undefined,
+    articleTextStatus: articleText ? "rss-content" : "not-attempted",
+    articleTextHash: articleText ? createHash("sha256").update(articleText).digest("hex") : undefined,
   };
 }
 

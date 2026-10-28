@@ -15,6 +15,8 @@ describe("player season rankings", () => {
       reboundsPerGame: 1,
       assistsPerGame: 2,
       stealsPerGame: 1,
+      blocksPerGame: 0,
+      freeThrowPercentage: 0,
       fieldGoalPercentage: 1,
       threePointPercentage: 2,
       playerCount: 3,

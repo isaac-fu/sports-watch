@@ -2,6 +2,7 @@ import { canonicalTeams, findTeamByProviderId, mergeProviderId, type ProviderCat
 import type { Game, GameEvent, GameEventType, Team } from "@/lib/models";
 import { formatPacificTipTime, pacificDateKey } from "@/lib/game-time";
 import type { CatalogProvider, GameFilters, NbaProvider } from "./types";
+import { fetchSportsProvider } from "@/lib/provider-backoff";
 
 type BdlTeam = { id: number; abbreviation: string; full_name?: string; name?: string; city?: string };
 type BdlPlayer = { id: number; first_name: string; last_name: string; position?: string; team: BdlTeam };
@@ -52,8 +53,11 @@ function mapTeam(team: BdlTeam): Team {
 }
 
 function mapStatus(game: BdlGame): Game["status"] {
+  const status = game.status?.trim() ?? "";
+  if (game.status_state === "final" || /^final\b/i.test(status)) return "final";
   if (game.status_state === "in_progress") return "live";
-  if (game.status_state === "final" || game.status?.toLowerCase() === "final") return "final";
+  // Older responses expose quarter/halftime labels without status_state.
+  if ((!game.status_state || game.status_state === "unknown") && /(?:\bqtr\b|\bquarter\b|\bhalftime\b|\bot\b|\bovertime\b)/i.test(status)) return "live";
   return "scheduled";
 }
 
@@ -63,7 +67,7 @@ function mapGame(game: BdlGame): Game {
   const date = pacificDateKey(startsAt, game.date);
   const providerTime = game.time && !["Final", "TBD"].includes(game.time) ? game.time : "TBD";
   const time = formatPacificTipTime(startsAt, providerTime);
-  return { id: `bdl-${game.id}`, date, time, startsAt, network: "NBA", venue: game.venue ?? "NBA arena", status: mapStatus(game), homeScore: game.home_team_score, awayScore: game.visitor_team_score, period: game.period, clock: game.status_state === "in_progress" ? game.time : undefined, updatedAt: new Date().toISOString(), home: mapTeam(game.home_team), away: mapTeam(game.visitor_team) };
+  return { id: `bdl-${game.id}`, date, time, startsAt, network: "NBA", venue: game.venue ?? "NBA arena", status: mapStatus(game), homeScore: game.home_team_score, awayScore: game.visitor_team_score, period: game.period, clock: mapStatus(game) === "live" ? game.time?.trim() || game.status : undefined, updatedAt: new Date().toISOString(), home: mapTeam(game.home_team), away: mapTeam(game.visitor_team) };
 }
 
 function classifyPlay(play: BdlPlay): GameEventType {
@@ -136,7 +140,7 @@ export class BallDontLieProvider implements NbaProvider, CatalogProvider {
       if (paginated) params.set("per_page", "100");
       if (cursor) params.set("cursor", cursor);
       const query = params.size > 0 ? `?${params.toString()}` : "";
-      const response = await fetch(`${this.baseUrl}${path}${query}`, { headers: { Authorization: this.apiKey }, cache: "no-store" });
+      const response = await fetchSportsProvider(`${this.baseUrl}${path}${query}`, this.apiKey);
       if (!response.ok) throw new Error(`BALLDONTLIE ${path} request failed with ${response.status}`);
       const payload = await response.json() as BdlResponse<T>;
       items.push(...payload.data);
@@ -170,17 +174,30 @@ export class BallDontLieProvider implements NbaProvider, CatalogProvider {
   }
 
   async getGames(filters: GameFilters = {}) {
-    const params = new URLSearchParams({ start_date: filters.from ?? todayKey(), end_date: filters.to ?? addDaysKey(180), per_page: "100" });
-    const response = await fetch(`${this.baseUrl}/games?${params.toString()}`, { headers: { Authorization: this.apiKey }, cache: "no-store" });
-    if (!response.ok) throw new Error(`BALLDONTLIE games request failed with ${response.status}`);
-    const payload = await response.json() as BdlResponse<BdlGame>;
-    return payload.data.map(mapGame).filter((game) => !filters.teamId || game.home.id === filters.teamId || game.away.id === filters.teamId);
+    const params = new URLSearchParams({ start_date: filters.from ?? todayKey(), end_date: filters.to ?? addDaysKey(7), per_page: "100" });
+    const team = canonicalTeams.find((candidate) => candidate.id === filters.teamId);
+    if (team?.providerIds?.balldontlie) params.append("team_ids[]", team.providerIds.balldontlie);
+    const games = new Map<string, Game>();
+    const cursors = new Set<string>();
+    for (let page = 0; page < 50; page += 1) {
+      const response = await fetchSportsProvider(`${this.baseUrl}/games?${params}`, this.apiKey);
+      if (!response.ok) throw new Error(`BALLDONTLIE games request failed with ${response.status}`);
+      const payload = await response.json() as BdlResponse<BdlGame>;
+      for (const row of payload.data) { const game = mapGame(row); games.set(game.id, game); }
+      const next = payload.meta?.next_cursor;
+      if (next === undefined || next === null) return Array.from(games.values()).filter((game) => !filters.teamId || game.home.id === filters.teamId || game.away.id === filters.teamId);
+      const cursor = String(next);
+      if (cursors.has(cursor)) throw new Error("BALLDONTLIE games returned a repeated cursor.");
+      cursors.add(cursor);
+      params.set("cursor", cursor);
+    }
+    throw new Error("BALLDONTLIE games exceeded the page limit.");
   }
 
   async getGame(gameId: string) {
     const id = providerGameId(gameId);
     if (!id) return null;
-    const response = await fetch(`${this.baseUrl}/games/${id}`, { headers: { Authorization: this.apiKey }, cache: "no-store" });
+    const response = await fetchSportsProvider(`${this.baseUrl}/games/${id}`, this.apiKey);
     if (response.status === 404) return null;
     if (!response.ok) throw new Error(`BALLDONTLIE game request failed with ${response.status}`);
     const payload = await response.json() as BdlSingleResponse<BdlGame>;
@@ -191,7 +208,7 @@ export class BallDontLieProvider implements NbaProvider, CatalogProvider {
     const id = providerGameId(gameId);
     if (!id) return [];
     const params = new URLSearchParams({ game_id: id });
-    const response = await fetch(`${this.baseUrl}/plays?${params.toString()}`, { headers: { Authorization: this.apiKey }, cache: "no-store" });
+    const response = await fetchSportsProvider(`${this.baseUrl}/plays?${params.toString()}`, this.apiKey);
     if (response.status === 404) return [];
     if (!response.ok) throw new Error(`BALLDONTLIE plays request failed with ${response.status}`);
     const payload = await response.json() as BdlResponse<BdlPlay>;

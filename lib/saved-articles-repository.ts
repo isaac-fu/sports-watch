@@ -1,6 +1,7 @@
 import type { NewsArticle, SavedArticle } from "./models";
 import { getDbPool } from "./db";
 import { demoAccountId } from "./store";
+import { publicNewsArticle } from "./news-text";
 
 declare global { var __courtsideSavedArticlesByAccount: Record<string, SavedArticle[]> | undefined; }
 
@@ -49,7 +50,7 @@ function mapRow(row: Record<string, unknown>): SavedArticle {
 function saveToMemory(accountId: string, article: NewsArticle): SavedArticle {
   const existing = memoryFor(accountId).find((item) => item.id === article.id);
   if (existing) return existing;
-  const saved = { ...article, savedAt: new Date().toISOString() };
+  const saved = { ...publicNewsArticle(article), savedAt: new Date().toISOString() };
   memoryFor(accountId).unshift(saved);
   return saved;
 }

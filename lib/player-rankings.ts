@@ -1,11 +1,12 @@
 import type { PlayerMetricRankings, PlayerStat } from "./models";
 
-type RankedMetric = "pointsPerGame" | "reboundsPerGame" | "assistsPerGame" | "stealsPerGame" | "fieldGoalPercentage" | "threePointPercentage";
+import { hasMetric, type LeaderboardMetric } from "./leaderboard";
+type RankedMetric = LeaderboardMetric;
 
 function metricRank(players: PlayerStat[], selected: PlayerStat, metric: RankedMetric) {
   const value = selected[metric];
-  if (value === undefined) return 0;
-  return 1 + players.filter((player) => player[metric] !== undefined && player[metric]! > value).length;
+  if (!hasMetric(value)) return 0;
+  return 1 + players.filter((player) => hasMetric(player[metric]) && player[metric]! > value).length;
 }
 
 export function calculatePlayerMetricRankings(playerId: string, stats: PlayerStat[]): PlayerMetricRankings | null {
@@ -17,6 +18,8 @@ export function calculatePlayerMetricRankings(playerId: string, stats: PlayerSta
     reboundsPerGame: metricRank(qualified, selected, "reboundsPerGame"),
     assistsPerGame: metricRank(qualified, selected, "assistsPerGame"),
     stealsPerGame: metricRank(qualified, selected, "stealsPerGame"),
+    blocksPerGame: metricRank(qualified, selected, "blocksPerGame"),
+    freeThrowPercentage: metricRank(qualified, selected, "freeThrowPercentage"),
     fieldGoalPercentage: metricRank(qualified, selected, "fieldGoalPercentage"),
     threePointPercentage: metricRank(qualified, selected, "threePointPercentage"),
     playerCount: qualified.length,

@@ -1,9 +1,20 @@
 "use client";
 
-import { createContext, useContext, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { dateKeyInTimeZone, formatLongDateInTimeZone, formatTipTime, greetingForTimeZone, timeZoneDisplayName } from "@/lib/game-time";
 import { searchPlayers, searchTeams } from "@/lib/entity-search";
 import { feedFreshnessLabel, feedFreshnessThresholdsMs } from "@/lib/feed-freshness";
+import { filterGamesByTeamScope, upcomingGamesForDay, type GameFilterScope } from "@/lib/game-filter";
+import { AppearanceColors, useAccentTheme } from "./appearance-colors";
+import { NewsInterestMenu } from "./news-interest-menu";
+import { LeaderboardView } from "./leaderboard-view";
+import { leaderboardMetrics, type LeaderboardMetric } from "@/lib/leaderboard";
+import { BoxScoreView } from "./box-score-view";
+import { ScheduleCache, scheduleTtlMs } from "@/lib/schedule-cache";
+import { currentNbaSeasonStart, nbaSeasonLabel } from "@/lib/season";
+
+type SchedulePayload = { data: ApiGame[]; meta?: { unavailable?: boolean; stale?: boolean; expiresAt?: number; retryAt?: number; rateLimited?: boolean } };
+const monthCache = new ScheduleCache<SchedulePayload>();
 
 type FeedItem = {
   id: string;
@@ -60,8 +71,8 @@ type TeamRecommendation = { team: Team; score: number; reason: string };
 type PlayerRecommendation = { player: Player; score: number; reason: string };
 type GameRecommendation = { game: ApiGame; score: number; reason: string };
 type DiscoveryRecommendations = { teams: TeamRecommendation[]; players: PlayerRecommendation[]; games: GameRecommendation[] };
-type CatchUpMoment = { id: string; title: string; detail: string; reason: string; importanceScore: number; source: "game-event" | "news"; context?: string };
-type CatchUpBrief = { title: string; lede: string; readTimeMinutes: number; generatedAt: string; game: ApiGame | null; moments: CatchUpMoment[]; source: "play-by-play" | "news" };
+type CatchUpMoment = { id: string; title: string; detail: string; reason: string; importanceScore: number; source: "box-score" | "news"; context?: string };
+type CatchUpBrief = { title: string; lede: string; readTimeMinutes: number; generatedAt: string; game: ApiGame | null; moments: CatchUpMoment[]; source: "box-score" | "news" };
 type CatchUpCitationData = { url: string; title: string; startIndex: number; endIndex: number };
 type DeliveredAlert = { id: string; candidateId: string; type: keyof AlertPreferences; title: string; body: string; priority: number; occurredAt: string; read: boolean; deliveredAt: string; readAt: string | null };
 const alertLabels: Record<keyof AlertPreferences, string> = { gameStarting: "Game starting", closeGame: "Close game", finalScore: "Final score", standoutPerformance: "Standout performance", injuryUpdate: "Injury update", leadChange: "Late lead change", milestone: "Player milestone" };
@@ -154,15 +165,16 @@ type PlayerSeasonStat = {
   turnoversPerGame: number;
   fieldGoalPercentage: number;
   threePointPercentage: number;
+  freeThrowPercentage?: number;
 };
 
 type PlayerCareerStat = Omit<PlayerSeasonStat, "season" | "seasonLabel" | "teamId" | "teamName"> & { seasonsPlayed: number };
-type PlayerGameLog = { id: string; gameId: string; date: string; season: number; opponentName: string; opponentShort: string; homeAway: "home" | "away"; result: "W" | "L"; score: string; minutes: string; points: number; rebounds: number; assists: number; steals: number; blocks: number; turnovers: number; fieldGoals: string; threePointers: string; plusMinus: number };
+type PlayerGameLog = { id: string; gameId: string; date: string; season: number; opponentName: string; opponentShort: string; homeAway: "home" | "away"; result: "W" | "L"; score: string; minutes: string; points: number; rebounds: number; assists: number; steals: number; blocks: number; turnovers: number; fieldGoals: string; threePointers: string; freeThrows?: string; plusMinus: number };
 type PlayerProfileData = {
   player: Player;
   bio: { height?: string; weight?: string; jerseyNumber?: string; college?: string; country?: string; draftYear?: number; draftRound?: number; draftNumber?: number };
   currentSeason: PlayerSeasonStat | null;
-  currentSeasonRankings?: { pointsPerGame: number; reboundsPerGame: number; assistsPerGame: number; stealsPerGame: number; fieldGoalPercentage: number; threePointPercentage: number; playerCount: number } | null;
+  currentSeasonRankings?: { pointsPerGame: number; reboundsPerGame: number; assistsPerGame: number; stealsPerGame: number; blocksPerGame: number; freeThrowPercentage: number; fieldGoalPercentage: number; threePointPercentage: number; playerCount: number } | null;
   career: PlayerCareerStat | null;
   seasons: PlayerSeasonStat[];
   lastTenGames: PlayerGameLog[];
@@ -304,27 +316,6 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-const buildSchedule = (): Game[] => {
-  const today = startOfDay(new Date());
-  const matchups = [
-    ["Golden State Warriors", "GSW", "#f3b942", "Los Angeles Lakers", "LAL", "#8f71c4", "7:30 PM", "ESPN", "Chase Center"],
-    ["New York Knicks", "NYK", "#3e7bd6", "Boston Celtics", "BOS", "#73b879", "4:00 PM", "ABC", "Madison Square Garden"],
-    ["Golden State Warriors", "GSW", "#f3b942", "Phoenix Suns", "PHX", "#e87554", "7:00 PM", "NBA TV", "Chase Center"],
-    ["Oklahoma City Thunder", "OKC", "#ee7654", "Golden State Warriors", "GSW", "#f3b942", "5:30 PM", "ESPN", "Paycom Center"],
-    ["Los Angeles Lakers", "LAL", "#8f71c4", "Golden State Warriors", "GSW", "#f3b942", "6:30 PM", "TNT", "Crypto.com Arena"],
-    ["Golden State Warriors", "GSW", "#f3b942", "New York Knicks", "NYK", "#3e7bd6", "4:30 PM", "ABC", "Chase Center"],
-    ["Oklahoma City Thunder", "OKC", "#ee7654", "New York Knicks", "NYK", "#3e7bd6", "6:00 PM", "NBA TV", "Paycom Center"],
-    ["Golden State Warriors", "GSW", "#f3b942", "Denver Nuggets", "DEN", "#4c79c7", "7:00 PM", "ESPN", "Chase Center"],
-    ["New York Knicks", "NYK", "#3e7bd6", "Miami Heat", "MIA", "#ed8068", "4:00 PM", "TNT", "Madison Square Garden"],
-    ["Golden State Warriors", "GSW", "#f3b942", "Dallas Mavericks", "DAL", "#6a9bc8", "6:30 PM", "ESPN", "Chase Center"],
-  ];
-  const offsets = [1, 3, 5, 9, 16, 23, 31, 38, 45, 53];
-  return offsets.map((offset, index) => {
-    const matchup = matchups[index];
-    const gameDate = addDays(today, offset);
-    return { id: `game-${index + 1}`, date: toDateKey(gameDate), homeId: matchup[1].toLowerCase(), home: matchup[0], homeShort: matchup[1], homeColor: matchup[2], homeImageUrl: teamImageUrl(matchup[1].toLowerCase()), awayId: matchup[4].toLowerCase(), away: matchup[3], awayShort: matchup[4], awayColor: matchup[5], awayImageUrl: teamImageUrl(matchup[4].toLowerCase()), time: matchup[6], network: matchup[7], venue: matchup[8], status: "scheduled" };
-  });
-};
 
 const mapApiGame = (game: ApiGame, timeZone = "America/Los_Angeles"): Game => ({ id: game.id, date: dateKeyInTimeZone(game.startsAt, game.date, timeZone), time: game.time, startsAt: game.startsAt, network: game.network, venue: game.venue, status: game.status, homeScore: game.homeScore, awayScore: game.awayScore, period: game.period, clock: game.clock, updatedAt: game.updatedAt, homeId: game.home.id, home: game.home.name, homeShort: game.home.short, homeColor: game.home.color, homeImageUrl: game.home.imageUrl, awayId: game.away.id, away: game.away.name, awayShort: game.away.short, awayColor: game.away.color, awayImageUrl: game.away.imageUrl });
 
@@ -342,35 +333,35 @@ function EntitySearch({ value, onChange, label, placeholder }: { value: string; 
   return <label className="entity-search"><span aria-hidden="true">⌕</span><input type="search" value={value} onChange={(event) => onChange(event.target.value)} aria-label={label} placeholder={placeholder} autoComplete="off" />{value && <button type="button" onClick={() => onChange("")} aria-label={`Clear ${label.toLowerCase()}`}>×</button>}</label>;
 }
 
-function GameRow({ game }: { game: Game }) {
+function GameScopeFilter({ value, onChange, followedCount, label }: { value: GameFilterScope; onChange: (value: GameFilterScope) => void; followedCount: number; label: string }) {
+  return <div className="game-scope-filter"><span>Show</span><div className="game-scope-options" role="group" aria-label={label}><button type="button" className={value === "all" ? "active" : ""} aria-pressed={value === "all"} onClick={() => onChange("all")}>All games</button><button type="button" className={value === "following" ? "active" : ""} aria-pressed={value === "following"} onClick={() => onChange("following")}>Following <small>{followedCount}</small></button></div></div>;
+}
+
+function GameRow({ game, onOpen }: { game: Game; onOpen: () => void }) {
   const timeZone = useContext(TimeZoneContext);
   const gameDate = new Date(`${game.date}T12:00:00`);
-  return <article className="schedule-game-row"><div className="schedule-game-date"><strong>{gameDate.toLocaleDateString("en-US", { weekday: "short" }).toUpperCase()}</strong><span>{gameDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span></div><div className="schedule-matchup"><div><TeamMark short={game.awayShort} color={game.awayColor} imageUrl={game.awayImageUrl} /><span>{game.away}</span></div><b>at</b><div><TeamMark short={game.homeShort} color={game.homeColor} imageUrl={game.homeImageUrl} /><span>{game.home}</span></div></div><div className="schedule-game-time"><strong>{formatTipTime(game.startsAt, game.time, timeZone, game.date)}</strong><span>{game.network}</span></div></article>;
+  return <button type="button" className="schedule-game-row game-link" onClick={onOpen} aria-label={`Open ${game.away} at ${game.home} box score`}><div className="schedule-game-date"><strong>{gameDate.toLocaleDateString("en-US", { weekday: "short" }).toUpperCase()}</strong><span>{gameDate.toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span></div><div className="schedule-matchup"><div><TeamMark short={game.awayShort} color={game.awayColor} imageUrl={game.awayImageUrl} /><span>{game.away}</span></div><b>at</b><div><TeamMark short={game.homeShort} color={game.homeColor} imageUrl={game.homeImageUrl} /><span>{game.home}</span></div></div><div className="schedule-game-time"><strong>{game.status === "final" ? `${game.awayScore ?? "—"} – ${game.homeScore ?? "—"}` : formatTipTime(game.startsAt, game.time, timeZone, game.date)}</strong><span>{game.status === "final" ? "Final · Box score →" : game.status === "live" ? "Live · Box score →" : game.network}</span></div></button>;
 }
 
 function LiveGameCard({ game, onOpen }: { game: Game; onOpen?: () => void }) {
-  const status = game.period ? `${game.period === 4 ? "4th quarter" : `Q${game.period}`} · ${game.clock ?? "Live"}` : "Live now";
+  const status = game.period ? `${game.period > 4 ? `OT${game.period - 4}` : `Q${game.period}`} · ${game.clock ?? "Live"}` : "Live now";
   return <section className="game-card"><div className="game-card-header"><div><p className="overline light">LIVE NOW</p><span className="game-status"><i /> {status}</span></div></div><div className="matchup"><div className="team-score"><TeamMark short={game.awayShort} color={game.awayColor} imageUrl={game.awayImageUrl} /><strong>{game.awayScore ?? "—"}</strong><span>{game.away}</span></div><div className="score-divider">—</div><div className="team-score"><TeamMark short={game.homeShort} color={game.homeColor} imageUrl={game.homeImageUrl} /><strong>{game.homeScore ?? "—"}</strong><span>{game.home}</span></div></div><div className="game-card-footer"><span>{game.network} · {game.venue}</span>{onOpen ? <button onClick={onOpen}>Open game center <span>↗</span></button> : <span>Live provider data</span>}</div></section>;
 }
 
 function GameCenterPanel({ center, loading, refreshing, catchUpLoading, error, onClose, onRetry, onCatchUp }: { center: GameCenterData | null; loading: boolean; refreshing: boolean; catchUpLoading: boolean; error: string; onClose: () => void; onRetry: () => void; onCatchUp: () => void }) {
   const timeZone = useContext(TimeZoneContext);
-  if (loading && !center) return <section className="game-center-panel game-center-loading"><span className="live-loader" /><strong>Opening game center…</strong><small>Loading the latest score and play-by-play.</small></section>;
+  if (loading && !center) return <section className="game-center-panel game-center-loading"><span className="live-loader" /><strong>Opening game center…</strong><small>Loading the latest score and box score.</small></section>;
   if (!center) return <section className="game-center-panel game-center-loading"><strong>Could not open this game.</strong><small>{error || "The game center is temporarily unavailable."}</small><button onClick={onRetry}>Try again</button></section>;
 
   const { game } = center;
   const statusLabel = game.status === "final" ? "Final" : game.status === "scheduled" ? `${dateKeyInTimeZone(game.startsAt, game.date, timeZone)} · ${formatTipTime(game.startsAt, game.time, timeZone, game.date)}` : `${game.period && game.period > 4 ? `OT${game.period - 4}` : `Q${game.period ?? "—"}`} · ${game.clock ?? "Live"}`;
-  const latestEvents = [...center.events].sort((a, b) => b.sequence - a.sequence);
-  const emptyMessage = center.playByPlayStatus === "pending" ? "Play-by-play will begin at tip-off." : "Play-by-play is not available for this game yet.";
-  const sourceLabel = center.source === "mock-repository" ? "Demo game data" : "BALLDONTLIE live data";
-  const iconFor = (type: GameEvent["type"]) => type === "score" ? "+" : type === "injury" ? "!" : type === "turnover" ? "↺" : type === "milestone" ? "✦" : type === "period" ? "◷" : "•";
+  const sourceLabel = center.source === "mock-repository" ? "Demo game data" : `${center.source} game data`;
 
   return <section className="game-center-panel" aria-label={`${game.away.name} at ${game.home.name} game center`}>
-    <div className="game-center-top"><div><p className="overline">SELECTED GAME</p><h2>{game.away.short} at {game.home.short}</h2></div><div className="game-center-actions"><span className={refreshing ? "refresh-state active" : "refresh-state"}>{refreshing ? "Updating…" : game.status === "live" ? "Auto-updates every 15 sec" : sourceLabel}</span><button className="game-center-catchup" onClick={onCatchUp} disabled={catchUpLoading || game.status === "scheduled"}>{catchUpLoading ? "Building recap…" : "✦ Catch me up"}</button><button className="game-center-close" onClick={onClose} aria-label="Close game center">×</button></div></div>
+    <div className="game-center-top"><div><p className="overline">SELECTED GAME</p><h2>{game.away.short} at {game.home.short}</h2></div><div className="game-center-actions"><span className={refreshing ? "refresh-state active" : "refresh-state"}>{refreshing ? "Updating…" : game.status === "live" ? "Auto-updates every 30 sec" : sourceLabel}</span><button className="game-center-catchup" onClick={onCatchUp} disabled={catchUpLoading || game.status === "scheduled"}>{catchUpLoading ? "Building recap…" : "✦ Catch me up"}</button><button className="game-center-close" onClick={onClose} aria-label="Close game center">×</button></div></div>
     {error && <div className="game-center-warning">{error} Showing the most recent update.</div>}
     <div className="game-center-scoreboard"><div className="game-center-team"><TeamMark short={game.away.short} color={game.away.color} imageUrl={game.away.imageUrl} /><span><strong>{game.away.name}</strong><small>Away</small></span><b>{game.awayScore ?? "—"}</b></div><div className={game.status === "live" ? "center-game-status live" : "center-game-status"}><i />{statusLabel}</div><div className="game-center-team home"><b>{game.homeScore ?? "—"}</b><span><strong>{game.home.name}</strong><small>Home</small></span><TeamMark short={game.home.short} color={game.home.color} imageUrl={game.home.imageUrl} /></div></div>
     <div className="game-center-meta"><span>{game.network}</span><span>{game.venue}</span><span>Updated {formatRelativeTime(center.updatedAt)}</span></div>
-    <div className="game-center-columns"><div className="play-by-play"><div className="game-center-section-heading"><div><p className="overline">LIVE TIMELINE</p><h3>Play-by-play</h3></div><span>{center.events.length} plays</span></div>{latestEvents.length > 0 ? <ol className="event-list">{latestEvents.map((event) => <li key={event.id}><span className={`event-icon ${event.type}`}>{iconFor(event.type)}</span><div><div className="event-heading"><span>{event.periodLabel} · {event.clock || "—"}</span>{event.homeScore !== undefined && event.awayScore !== undefined && <b>{game.away.short} {event.awayScore} · {game.home.short} {event.homeScore}</b>}</div><strong>{event.title}</strong><p>{event.description}</p></div></li>)}</ol> : <div className="game-center-empty">{emptyMessage}</div>}</div><aside className="key-moments-panel"><div className="game-center-section-heading"><div><p className="overline">WHY IT MATTERS</p><h3>Key moments</h3></div><span>Top {center.keyMoments.length}</span></div>{center.keyMoments.length > 0 ? <ol className="key-moment-list">{center.keyMoments.map((event, index) => <li key={event.id}><span>{String(index + 1).padStart(2, "0")}</span><div><small>{event.periodLabel} · {event.clock || "—"} · {event.importanceScore}% impact</small><strong>{event.title}</strong><p>{event.description}</p></div></li>)}</ol> : <div className="game-center-empty">Important moments will appear as the game develops.</div>}<div className="provider-note"><span className="status-dot" />{sourceLabel}</div></aside></div>
   </section>;
 }
 
@@ -429,36 +420,31 @@ function TeamProfileView({ profile, loading, error, isFollowed, onBack, onRetry,
   </div>;
 }
 
-function PlayerProfileView({ profile, loading, error, isFollowed, onBack, onRetry, onToggleFollow }: { profile: PlayerProfileData | null; loading: boolean; error: string; isFollowed: boolean; onBack: () => void; onRetry: () => void; onToggleFollow: () => void }) {
-  if (loading && !profile) return <><div className="page-heading player-profile-heading"><button className="profile-back" onClick={onBack}>← My players</button><p className="overline">PLAYER PROFILE</p><h1>Loading player…</h1></div><section className="player-profile-state"><span className="live-loader" /><strong>Loading season and career statistics</strong><small>Collecting the latest player data and game logs.</small></section></>;
-  if (!profile) return <><div className="page-heading player-profile-heading"><button className="profile-back" onClick={onBack}>← My players</button><p className="overline">PLAYER PROFILE</p><h1>Player unavailable</h1></div><section className="player-profile-state"><strong>Could not load this profile.</strong><small>{error || "Player statistics are temporarily unavailable."}</small><button onClick={onRetry}>Try again</button></section></>;
+function PlayerProfileView({ profile, loading, error, isFollowed, onBack, onRetry, onToggleFollow, backLabel, onOpenLeaderboard }: { onOpenLeaderboard: (metric: LeaderboardMetric) => void; backLabel: string; profile: PlayerProfileData | null; loading: boolean; error: string; isFollowed: boolean; onBack: () => void; onRetry: () => void; onToggleFollow: () => void }) {
+  if (loading && !profile) return <><div className="page-heading player-profile-heading"><button className="profile-back" onClick={onBack}>← {backLabel}</button><p className="overline">PLAYER PROFILE</p><h1>Loading player…</h1></div><section className="player-profile-state"><span className="live-loader" /><strong>Loading season and career statistics</strong><small>Collecting the latest player data and game logs.</small></section></>;
+  if (!profile) return <><div className="page-heading player-profile-heading"><button className="profile-back" onClick={onBack}>← {backLabel}</button><p className="overline">PLAYER PROFILE</p><h1>Player unavailable</h1></div><section className="player-profile-state"><strong>Could not load this profile.</strong><small>{error || "Player statistics are temporarily unavailable."}</small><button onClick={onRetry}>Try again</button></section></>;
 
   const season = profile.currentSeason;
   const career = profile.career;
   const seasonRankings = profile.currentSeasonRankings;
-  const seasonMetrics = season ? [
-    { label: "PPG", value: season.pointsPerGame, rank: seasonRankings?.pointsPerGame },
-    { label: "RPG", value: season.reboundsPerGame, rank: seasonRankings?.reboundsPerGame },
-    { label: "APG", value: season.assistsPerGame, rank: seasonRankings?.assistsPerGame },
-    { label: "SPG", value: season.stealsPerGame, rank: seasonRankings?.stealsPerGame },
-    { label: "FG%", value: `${season.fieldGoalPercentage}%`, rank: seasonRankings?.fieldGoalPercentage },
-    { label: "3P%", value: `${season.threePointPercentage}%`, rank: seasonRankings?.threePointPercentage },
-  ] : [];
+  const seasonMetrics = season ? leaderboardMetrics.map(([key, label]) => ({
+    key, label, value: season[key] === undefined ? "—" : `${season[key]}${key.endsWith("Percentage") ? "%" : ""}`, rank: seasonRankings?.[key],
+  })) : [];
   const careerMetrics = career ? [["PPG", career.pointsPerGame], ["RPG", career.reboundsPerGame], ["APG", career.assistsPerGame], ["Games", career.gamesPlayed], ["FG%", `${career.fieldGoalPercentage}%`], ["3P%", `${career.threePointPercentage}%`]] : [];
   const draft = profile.bio.draftYear ? `${profile.bio.draftYear}${profile.bio.draftRound ? ` · Round ${profile.bio.draftRound}` : ""}${profile.bio.draftNumber ? ` · Pick ${profile.bio.draftNumber}` : ""}` : "—";
   const sourceLabel = profile.source === "mock-repository" ? "Demo profile data" : `${profile.source} player data`;
 
   return <div className="player-profile-page">
-    <div className="player-profile-heading"><button className="profile-back" onClick={onBack}>← My players</button></div>
+    <div className="player-profile-heading"><button className="profile-back" onClick={onBack}>← {backLabel}</button></div>
     <section className="player-profile-hero"><PlayerAvatar player={profile.player} className="player-profile-avatar" /><div className="player-profile-title"><p className="overline">{profile.player.position}{profile.bio.jerseyNumber ? ` · #${profile.bio.jerseyNumber}` : ""}</p><h1>{profile.player.name}</h1><p>{profile.player.teamName}</p></div><button className={isFollowed ? "profile-follow following" : "profile-follow"} onClick={onToggleFollow}>{isFollowed ? "✓ Following" : "+ Follow player"}</button></section>
     <div className="player-bio-strip"><div><span>Height</span><strong>{profile.bio.height ?? "—"}</strong></div><div><span>Weight</span><strong>{profile.bio.weight ? `${profile.bio.weight} lb` : "—"}</strong></div><div><span>Country</span><strong>{profile.bio.country ?? "—"}</strong></div><div><span>College</span><strong>{profile.bio.college ?? "—"}</strong></div><div><span>Draft</span><strong>{draft}</strong></div></div>
 
-    <div className="player-stat-panels"><section className="player-stat-panel"><div className="section-heading"><div><p className="overline">CURRENT FORM</p><h2>{season?.seasonLabel ?? "Current season"}</h2></div><span className="count-badge">{season ? `${season.gamesPlayed} GP` : "No data"}</span></div>{season ? <div className="player-stat-grid">{seasonMetrics.map(({ label, value, rank }) => <div key={label}><strong>{value}</strong><span>{label}</span><small>{rank ? `#${rank} NBA` : "Rank unavailable"}</small></div>)}</div> : <div className="profile-empty">Current-season averages are not available yet.</div>}</section>
+    <div className="player-stat-panels"><section className="player-stat-panel"><div className="section-heading"><div><p className="overline">CURRENT FORM</p><h2>{season?.seasonLabel ?? "Current season"}</h2></div><span className="count-badge">{season ? `${season.gamesPlayed} GP` : "No data"}</span></div>{season ? <div className="player-stat-grid">{seasonMetrics.map(({ key, label, value, rank }) => <button className="player-stat-link" key={key} onClick={() => onOpenLeaderboard(key)} aria-label={`View ${label} leaderboard`}><strong>{value}</strong><span>{label}</span><small>{rank ? `#${rank} NBA` : "View leaderboard"}</small></button>)}</div> : <div className="profile-empty">Current-season averages are not available yet.</div>}</section>
       <section className="player-stat-panel"><div className="section-heading"><div><p className="overline">REGULAR SEASON</p><h2>Career averages</h2></div><span className="count-badge">{career ? `${career.seasonsPlayed} seasons` : "No data"}</span></div>{career ? <div className="player-stat-grid">{careerMetrics.map(([label, value]) => <div key={label}><strong>{value}</strong><span>{label}</span></div>)}</div> : <div className="profile-empty">Career averages are not available for this player.</div>}</section></div>
 
-    <section className="player-data-panel"><div className="section-heading"><div><p className="overline">RECENT FORM</p><h2>Last 10 games</h2><p className="panel-copy">Latest completed regular-season box scores, including the prior season when needed.</p></div><span className="count-badge">{profile.lastTenGames.length} games</span></div>{profile.lastTenGames.length > 0 ? <div className="player-table-wrap"><table className="player-stats-table"><thead><tr><th>Date</th><th>Opponent</th><th>Result</th><th>MIN</th><th>PTS</th><th>REB</th><th>AST</th><th>STL</th><th>BLK</th><th>TO</th><th>FG</th><th>3PT</th><th>+/-</th></tr></thead><tbody>{profile.lastTenGames.map((game) => <tr key={game.id}><td>{new Date(`${game.date}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</td><td><strong>{game.homeAway === "home" ? "vs" : "@"} {game.opponentShort}</strong></td><td><span className={game.result === "W" ? "game-result win" : "game-result loss"}>{game.result}</span> {game.score}</td><td>{game.minutes}</td><td><strong>{game.points}</strong></td><td>{game.rebounds}</td><td>{game.assists}</td><td>{game.steals}</td><td>{game.blocks}</td><td>{game.turnovers}</td><td>{game.fieldGoals}</td><td>{game.threePointers}</td><td className={game.plusMinus >= 0 ? "positive" : "negative"}>{game.plusMinus > 0 ? "+" : ""}{game.plusMinus}</td></tr>)}</tbody></table></div> : <div className="profile-empty table-empty">No completed regular-season game logs are available.</div>}</section>
+    <section className="player-data-panel"><div className="section-heading"><div><p className="overline">RECENT FORM</p><h2>Last 10 games</h2><p className="panel-copy">Latest completed regular-season box scores, including the prior season when needed.</p></div><span className="count-badge">{profile.lastTenGames.length} games</span></div>{profile.lastTenGames.length > 0 ? <div className="player-table-wrap"><table className="player-stats-table"><thead><tr><th>Date</th><th>Opponent</th><th>Result</th><th>MIN</th><th>PTS</th><th>REB</th><th>AST</th><th>STL</th><th>BLK</th><th>TO</th><th>FG</th><th>3PT</th><th>FT</th><th>+/-</th></tr></thead><tbody>{profile.lastTenGames.map((game) => <tr key={game.id}><td>{new Date(`${game.date}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</td><td><strong>{game.homeAway === "home" ? "vs" : "@"} {game.opponentShort}</strong></td><td><span className={game.result === "W" ? "game-result win" : "game-result loss"}>{game.result}</span> {game.score}</td><td>{game.minutes}</td><td><strong>{game.points}</strong></td><td>{game.rebounds}</td><td>{game.assists}</td><td>{game.steals}</td><td>{game.blocks}</td><td>{game.turnovers}</td><td>{game.fieldGoals}</td><td>{game.threePointers}</td><td>{game.freeThrows ?? "—"}</td><td className={game.plusMinus >= 0 ? "positive" : "negative"}>{game.plusMinus > 0 ? "+" : ""}{game.plusMinus}</td></tr>)}</tbody></table></div> : <div className="profile-empty table-empty">No completed regular-season game logs are available.</div>}</section>
 
-    <section className="player-data-panel"><div className="section-heading"><div><p className="overline">CAREER</p><h2>Season by season</h2><p className="panel-copy">Regular-season averages, weighted by games played in the career summary above.</p></div><span className="count-badge">{profile.seasons.length} seasons</span></div>{profile.seasons.length > 0 ? <div className="player-table-wrap"><table className="player-stats-table season-history"><thead><tr><th>Season</th><th>Team</th><th>GP</th><th>PTS</th><th>REB</th><th>AST</th><th>STL</th><th>BLK</th><th>TO</th><th>FG%</th><th>3P%</th></tr></thead><tbody>{profile.seasons.map((item) => <tr key={item.season}><td><strong>{item.seasonLabel}</strong></td><td>{item.teamName}</td><td>{item.gamesPlayed}</td><td>{item.pointsPerGame}</td><td>{item.reboundsPerGame}</td><td>{item.assistsPerGame}</td><td>{item.stealsPerGame}</td><td>{item.blocksPerGame}</td><td>{item.turnoversPerGame}</td><td>{item.fieldGoalPercentage}</td><td>{item.threePointPercentage}</td></tr>)}</tbody></table></div> : <div className="profile-empty table-empty">Season history is unavailable.</div>}<div className="provider-note"><span className="status-dot" />{sourceLabel} · Updated {formatRelativeTime(profile.updatedAt)}</div></section>
+    <section className="player-data-panel"><div className="section-heading"><div><p className="overline">CAREER</p><h2>Season by season</h2><p className="panel-copy">Regular-season averages, weighted by games played in the career summary above.</p></div><span className="count-badge">{profile.seasons.length} seasons</span></div>{profile.seasons.length > 0 ? <div className="player-table-wrap"><table className="player-stats-table season-history"><thead><tr><th>Season</th><th>Team</th><th>GP</th><th>PTS</th><th>REB</th><th>AST</th><th>STL</th><th>BLK</th><th>TO</th><th>FG%</th><th>3P%</th><th>FT%</th></tr></thead><tbody>{profile.seasons.map((item) => <tr key={item.season}><td><strong>{item.seasonLabel}</strong></td><td>{item.teamName}</td><td>{item.gamesPlayed}</td><td>{item.pointsPerGame}</td><td>{item.reboundsPerGame}</td><td>{item.assistsPerGame}</td><td>{item.stealsPerGame}</td><td>{item.blocksPerGame}</td><td>{item.turnoversPerGame}</td><td>{item.fieldGoalPercentage}</td><td>{item.threePointPercentage}</td><td>{item.freeThrowPercentage ?? "—"}</td></tr>)}</tbody></table></div> : <div className="profile-empty table-empty">Season history is unavailable.</div>}<div className="provider-note"><span className="status-dot" />{sourceLabel} · Updated {formatRelativeTime(profile.updatedAt)}</div></section>
   </div>;
 }
 
@@ -506,11 +492,11 @@ function SettingsView({ account, authenticated, teams, players, preferences, sav
   };
 
   return <div className="settings-page"><div className="page-heading"><p className="overline">PERSONALIZE SPORTS WATCH</p><h1>Settings</h1><p className="subhead">Manage your account, favorites, and display preferences in one place.</p></div><div className="settings-shell"><nav className="settings-menu" aria-label="Settings sections">{([['account', 'Account', 'Name, timezone, and password'], ['preferences', 'Preferences', 'Teams and players'], ['appearance', 'Appearance', 'Light and dark mode']] as const).map(([key, label, detail]) => <button className={section === key ? "active" : ""} key={key} onClick={() => { onSectionChange(key); setAccountStatus(""); }}><span><strong>{label}</strong><small>{detail}</small></span><b>›</b></button>)}</nav><section className="settings-content">
-    {section === "account" ? <><div className="settings-section-heading"><p className="overline">ACCOUNT SETTINGS</p><h2>Your account</h2><p>Update the details used across Sports Watch.</p></div>{authenticated ? <div className="account-settings-forms"><form className="settings-form" onSubmit={submitProfile}><h3>Account details</h3><label>Display name<input name="displayName" defaultValue={account.displayName} minLength={2} maxLength={50} required /></label><label>Email <small className={account.emailVerified ? "email-state verified" : "email-state pending"}>{account.emailVerified ? "Verified" : "Verification pending"}</small><input value={account.email} disabled /></label><label>Game time timezone<select name="timezone" defaultValue={account.timezone}>{timeZoneOptions.map(([value, label]) => <option value={value} key={value}>{label} ({value})</option>)}</select></label><button disabled={accountSaving}>Save profile</button></form><form className="settings-form password-form" onSubmit={submitPassword}><h3>Change password</h3><p className="password-note">Changing your password requires email confirmation before your next sign-in.</p><label>Current password<input name="currentPassword" type="password" autoComplete="current-password" required /></label><label>New password<input name="newPassword" type="password" autoComplete="new-password" minLength={8} maxLength={128} required /></label><button disabled={accountSaving}>Update password</button></form>{accountStatus && <p className="settings-status" role="status">{accountStatus}{verificationUrl && <a href={verificationUrl}> Open local verification link</a>}</p>}</div> : <div className="settings-signin"><strong>Sign in to edit account details</strong><p>Your preferences can still be explored in demo mode.</p><button onClick={onSignIn}>Sign in</button></div>}</> : section === "preferences" ? <><div className="settings-section-heading"><p className="overline">PREFERENCES</p><h2>Shape your feed</h2><p>Tap a compact bubble to follow or unfollow it. No profile images, just quick choices.</p></div><div className="compact-preference-section"><div className="compact-preference-title"><h3>Teams</h3><span>{preferences.followedTeamIds.length} followed</span></div><EntitySearch value={teamQuery} onChange={setTeamQuery} label="Search teams in settings" placeholder="Search teams" /><div className="preference-bubbles">{visibleTeams.map((team) => { const selected = preferences.followedTeamIds.includes(team.id); return <button className={selected ? "preference-bubble selected" : "preference-bubble"} key={team.id} disabled={savingPreferences} onClick={() => onToggleTeam(team.id)}><span>{team.name}</span><b>{selected ? "✓" : "+"}</b></button>; })}</div></div><div className="compact-preference-section"><div className="compact-preference-title"><h3>Players</h3><span>{preferences.followedPlayerIds.length} followed</span></div><EntitySearch value={playerQuery} onChange={setPlayerQuery} label="Search players in settings" placeholder="Search players" /><div className="preference-bubbles">{visiblePlayers.map((player) => { const selected = preferences.followedPlayerIds.includes(player.id); return <button className={selected ? "preference-bubble selected" : "preference-bubble"} key={player.id} disabled={savingPreferences} onClick={() => onTogglePlayer(player.id)}><span>{player.name}</span><b>{selected ? "✓" : "+"}</b></button>; })}</div></div></> : <><div className="settings-section-heading"><p className="overline">APPEARANCE</p><h2>Choose a theme</h2><p>Your selection is saved on this device.</p></div><div className="theme-options">{([['dark', 'Dark', 'Deep navy surfaces with bright blue accents'], ['light', 'Light', 'White surfaces with crisp blue accents']] as const).map(([mode, label, detail]) => <button className={theme === mode ? "theme-option selected" : "theme-option"} key={mode} onClick={() => onThemeChange(mode)}><span className={`theme-preview ${mode}`}><i /><i /><i /></span><span><strong>{label}</strong><small>{detail}</small></span><b>{theme === mode ? "✓" : ""}</b></button>)}</div></>}
+    {section === "account" ? <><div className="settings-section-heading"><p className="overline">ACCOUNT SETTINGS</p><h2>Your account</h2><p>Update the details used across Sports Watch.</p></div>{authenticated ? <div className="account-settings-forms"><form className="settings-form" onSubmit={submitProfile}><h3>Account details</h3><label>Display name<input name="displayName" defaultValue={account.displayName} minLength={2} maxLength={50} required /></label><label>Email <small className={account.emailVerified ? "email-state verified" : "email-state pending"}>{account.emailVerified ? "Verified" : "Verification pending"}</small><input value={account.email} disabled /></label><label>Game time timezone<select name="timezone" defaultValue={account.timezone}>{timeZoneOptions.map(([value, label]) => <option value={value} key={value}>{label} ({value})</option>)}</select></label><button disabled={accountSaving}>Save profile</button></form><form className="settings-form password-form" onSubmit={submitPassword}><h3>Change password</h3><p className="password-note">Changing your password requires email confirmation before your next sign-in.</p><label>Current password<input name="currentPassword" type="password" autoComplete="current-password" required /></label><label>New password<input name="newPassword" type="password" autoComplete="new-password" minLength={8} maxLength={128} required /></label><button disabled={accountSaving}>Update password</button></form>{accountStatus && <p className="settings-status" role="status">{accountStatus}{verificationUrl && <a href={verificationUrl}> Open local verification link</a>}</p>}</div> : <div className="settings-signin"><strong>Sign in to edit account details</strong><p>Your preferences can still be explored in demo mode.</p><button onClick={onSignIn}>Sign in</button></div>}</> : section === "preferences" ? <><div className="settings-section-heading"><p className="overline">PREFERENCES</p><h2>Shape your feed</h2><p>Tap a compact bubble to follow or unfollow it. No profile images, just quick choices.</p></div><div className="compact-preference-section"><div className="compact-preference-title"><h3>Teams</h3><span>{preferences.followedTeamIds.length} followed</span></div><EntitySearch value={teamQuery} onChange={setTeamQuery} label="Search teams in settings" placeholder="Search teams" /><div className="preference-bubbles">{visibleTeams.map((team) => { const selected = preferences.followedTeamIds.includes(team.id); return <button className={selected ? "preference-bubble selected" : "preference-bubble"} key={team.id} disabled={savingPreferences} onClick={() => onToggleTeam(team.id)}><span>{team.name}</span><b>{selected ? "✓" : "+"}</b></button>; })}</div></div><div className="compact-preference-section"><div className="compact-preference-title"><h3>Players</h3><span>{preferences.followedPlayerIds.length} followed</span></div><EntitySearch value={playerQuery} onChange={setPlayerQuery} label="Search players in settings" placeholder="Search players" /><div className="preference-bubbles">{visiblePlayers.map((player) => { const selected = preferences.followedPlayerIds.includes(player.id); return <button className={selected ? "preference-bubble selected" : "preference-bubble"} key={player.id} disabled={savingPreferences} onClick={() => onTogglePlayer(player.id)}><span>{player.name}</span><b>{selected ? "✓" : "+"}</b></button>; })}</div></div></> : <><div className="settings-section-heading"><p className="overline">APPEARANCE</p><h2>Choose a theme</h2><p>Your selection is saved on this device.</p></div><div className="theme-options">{([['dark', 'Dark', 'Deep surfaces with your chosen accent'], ['light', 'Light', 'Light surfaces with your chosen accent']] as const).map(([mode, label, detail]) => <button className={theme === mode ? "theme-option selected" : "theme-option"} key={mode} onClick={() => onThemeChange(mode)}><span className={`theme-preview ${mode}`}><i /><i /><i /></span><span><strong>{label}</strong><small>{detail}</small></span><b>{theme === mode ? "✓" : ""}</b></button>)}</div><AppearanceColors theme={theme} /></>}
   </section></div></div>;
 }
 
-function CatchUpModal({ brief, onClose }: { brief: CatchUpBrief; onClose: () => void }) {
+function CatchUpModal({ brief, onClose, onFeedback }: { brief: CatchUpBrief; onClose: () => void; onFeedback: () => Promise<void> }) {
   const [slide, setSlide] = useState(0);
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("");
@@ -539,7 +525,7 @@ function CatchUpModal({ brief, onClose }: { brief: CatchUpBrief; onClose: () => 
       const payload = await fetchJson<{ data: { answer: string; citations: CatchUpCitationData[]; provider: "groq" | "local"; webSearchUsed: boolean; fallbackReason?: "not-configured" | "provider-unavailable" } }>("/api/catch-up/assist", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: prompt, moment }),
+        body: JSON.stringify({ question: prompt, momentId: moment.id, momentSource: moment.source, gameId: brief.game?.id }),
       });
       setAnswer(payload.data.answer);
       setCitations(payload.data.citations);
@@ -558,10 +544,10 @@ function CatchUpModal({ brief, onClose }: { brief: CatchUpBrief; onClose: () => 
 
   return <div className="modal-backdrop" onClick={onClose}><section className="catch-up-modal" role="dialog" aria-modal="true" aria-labelledby="catch-up-title" onClick={(event) => event.stopPropagation()}>
     <button className="modal-close" onClick={onClose} aria-label="Close catch-up">×</button>
-    <div className="catch-up-header"><p className="overline">YOUR {brief.readTimeMinutes}-MINUTE CATCH-UP</p><h2 id="catch-up-title">{brief.title}</h2><p className="modal-lede">{brief.lede}</p><div className="catch-up-source"><i />{brief.source === "play-by-play" ? "Built from live play-by-play" : "Built from the latest NBA coverage"}</div></div>
+    <div className="catch-up-header"><p className="overline">YOUR {brief.readTimeMinutes}-MINUTE CATCH-UP</p><h2 id="catch-up-title">{brief.title}</h2><p className="modal-lede">{brief.lede}</p><div className="catch-up-source"><i />{brief.source === "box-score" ? "Built from game scores and box-score highlights" : "Built from the latest NBA coverage"}</div></div>
     {brief.game && <div className="recap-stat-row"><div><strong>{brief.game.awayScore ?? "—"}–{brief.game.homeScore ?? "—"}</strong><span>{brief.game.away.short} at {brief.game.home.short}</span></div><div><strong>{brief.game.status === "live" ? (brief.game.period && brief.game.period > 4 ? `OT${brief.game.period - 4}` : `Q${brief.game.period ?? "—"}`) : "FINAL"}</strong><span>{brief.game.status === "live" ? brief.game.clock ?? "Live" : "Game status"}</span></div><div><strong>{brief.moments.length}</strong><span>Key updates</span></div></div>}
     <div className="catch-up-workspace"><div className="catch-up-reader">
-      {showingAnswer ? <article className="catch-up-slide assistant-answer-slide" aria-live="polite"><button className="assistant-answer-back" onClick={backToStory} disabled={asking}>← Back to story {slide + 1}</button>{asking ? <div className="assistant-answer-loading"><span className="live-loader" /><strong>Sports Watch is thinking…</strong><small>Building an answer from this story&apos;s context.</small></div> : <><p className="slide-reason">SPORTS WATCH ASSISTANT</p><h3>Answer</h3><FormattedAssistantAnswer value={answer} /><small className="assistant-answer-meta">{assistantMeta}</small>{citations.length > 0 && <div className="assistant-sources"><b>Sources</b><ol>{citations.map((citation, index) => { const url = safeExternalUrl(citation.url); return url ? <li key={url}><a href={url} target="_blank" rel="noreferrer"><span>{index + 1}</span>{citation.title}</a></li> : null; })}</ol></div>}</>}</article> : moment ? <article className="catch-up-slide"><div className="slide-progress"><span>STORY {slide + 1} OF {brief.moments.length}</span><div>{brief.moments.map((item, index) => <button key={item.id} className={index === slide ? "active" : ""} onClick={() => moveTo(index)} aria-label={`Open story ${index + 1}`} />)}</div></div><p className="slide-reason">{moment.reason}</p><h3>{moment.title}</h3>{moment.context && <p className="slide-context">{moment.context}</p>}<p className="slide-detail">{moment.detail}</p><div className="slide-importance"><span>Importance</span><b>{moment.importanceScore}/100</b></div></article> : <div className="catch-up-empty">There are no significant updates yet.</div>}
+      {showingAnswer ? <article className="catch-up-slide assistant-answer-slide" aria-live="polite"><button className="assistant-answer-back" onClick={backToStory} disabled={asking}>← Back to story {slide + 1}</button>{asking ? <div className="assistant-answer-loading"><span className="live-loader" /><strong>Sports Watch is thinking…</strong><small>Building an answer from this story&apos;s context.</small></div> : <><p className="slide-reason">SPORTS WATCH ASSISTANT</p><h3>Answer</h3><FormattedAssistantAnswer value={answer} /><small className="assistant-answer-meta">{assistantMeta}</small>{citations.length > 0 && <div className="assistant-sources"><b>Sources</b><ol>{citations.map((citation, index) => { const url = safeExternalUrl(citation.url); return url ? <li key={url}><a href={url} target="_blank" rel="noreferrer"><span>{index + 1}</span>{citation.title}</a></li> : null; })}</ol></div>}</>}</article> : moment ? <article className="catch-up-slide"><div className="slide-progress"><span>STORY {slide + 1} OF {brief.moments.length}</span><div>{brief.moments.map((item, index) => <button key={item.id} className={index === slide ? "active" : ""} onClick={() => moveTo(index)} aria-label={`Open story ${index + 1}`} />)}</div></div>{moment.source === "news" && <NewsInterestMenu articleId={moment.id} onSaved={onFeedback} />}<p className="slide-reason">{moment.reason}</p><h3>{moment.title}</h3>{moment.context && <p className="slide-context">{moment.context}</p>}<p className="slide-detail">{moment.detail}</p><div className="slide-importance"><span>Importance</span><b>{moment.importanceScore}/100</b></div></article> : <div className="catch-up-empty">There are no significant updates yet.</div>}
       {!showingAnswer && <div className="catch-up-navigation"><button onClick={() => moveTo(slide - 1)} disabled={slide === 0}>← Previous</button><button onClick={slide === brief.moments.length - 1 ? onClose : () => moveTo(slide + 1)}>{slide === brief.moments.length - 1 ? "Back to my feed" : "Next story →"}</button></div>}
     </div><aside className="catch-up-assistant"><p className="overline">ASK ABOUT THIS STORY</p><h3>Sports Watch assistant</h3><p>Summaries use the recap. Freshness questions search trusted NBA sources and include citations.</p><div className="assistant-prompts">{["Summarize this in one sentence", "Why does this matter?", "What should I watch next?", "Find the latest update"].map((prompt) => <button key={prompt} disabled={!moment || asking} onClick={() => { setQuestion(prompt); void ask(prompt); }}>{prompt}</button>)}</div><form onSubmit={(event) => { event.preventDefault(); void ask(question); }}><label htmlFor="catch-up-question">Your question</label><textarea id="catch-up-question" value={question} onChange={(event) => setQuestion(event.target.value)} maxLength={500} placeholder="Ask about this update…" /><button disabled={!question.trim() || !moment || asking}>{asking ? "Thinking…" : "Ask assistant"}</button></form>{assistantError && <p className="assistant-error" role="alert">{assistantError}</p>}</aside></div>
   </section></div>;
@@ -689,12 +675,15 @@ export default function Home() {
 function SportsWatchApp() {
   const today = useMemo(() => startOfDay(new Date()), []);
   const [currentTime, setCurrentTime] = useState(() => new Date());
-  const fallbackSchedule = useMemo(() => buildSchedule(), []);
-  const [schedule, setSchedule] = useState<Game[]>(fallbackSchedule);
+  const [schedule, setSchedule] = useState<Game[]>([]);
+  const [liveSnapshot, setLiveSnapshot] = useState<ApiGame[]>([]);
+  const [liveLoading, setLiveLoading] = useState(true);
+  const [liveError, setLiveError] = useState("");
   const [teams, setTeams] = useState<Team[]>(defaultTeams);
   const [players, setPlayers] = useState<Player[]>(defaultPlayers);
   const [account, setAccount] = useState<Account>({ id: "account-demo", displayName: "Alex Morgan", email: "", timezone: "America/Los_Angeles", createdAt: "", emailVerified: true });
   const [theme, setTheme] = useState<ThemeMode>(() => window.localStorage.getItem("sports-watch-theme") === "light" ? "light" : "dark");
+  useAccentTheme(theme);
   const [authenticated, setAuthenticated] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
   const [passwordResetToken, setPasswordResetToken] = useState("");
@@ -710,6 +699,19 @@ function SportsWatchApp() {
   const [feedRefreshStatus, setFeedRefreshStatus] = useState("");
   const [lastFeedRefreshAt, setLastFeedRefreshAt] = useState(() => Date.now());
   const [feedFreshnessStatus, setFeedFreshnessStatus] = useState("");
+  async function reloadNewsPreferences() {
+    const [prefs, feed] = await Promise.all([
+      fetchJson<{ data: Preferences }>("/api/preferences", { cache: "no-store" }),
+      fetchJson<{ data: FeedItem[] }>("/api/feed", { cache: "no-store" }),
+    ]);
+    setPreferences(prefs.data);
+    setFeedItems(newestFeedFirst(feed.data));
+    // Preserve the selected game's context; refreshing news never triggers ingestion.
+    const gameQuery = catchUpBrief?.game?.id ? `?gameId=${encodeURIComponent(catchUpBrief.game.id)}` : "";
+    const recap = await fetchJson<{ data: CatchUpBrief }>(`/api/catch-up${gameQuery}`, { cache: "no-store" });
+    setCatchUpBrief(recap.data);
+  }
+
   const [preferencesSaving, setPreferencesSaving] = useState(false);
   const [preferenceStatus, setPreferenceStatus] = useState("");
   const [teamSearch, setTeamSearch] = useState("");
@@ -718,10 +720,28 @@ function SportsWatchApp() {
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("account");
   const [catchUpOpen, setCatchUpOpen] = useState(false);
   const [catchUpLoading, setCatchUpLoading] = useState(true);
-  const [scheduleView, setScheduleView] = useState<ScheduleView>("month");
-  const [selectedMonthIndex, setSelectedMonthIndex] = useState(0);
+  const [leaderboardMetric, setLeaderboardMetric] = useState<LeaderboardMetric>("pointsPerGame");
+  const [leaderboardPlayerId, setLeaderboardPlayerId] = useState<string | null>(null);
+  const [scheduleView, setScheduleView] = useState<ScheduleView>("day");
+  const [selectedMonthIndex, setSelectedMonthIndex] = useState(12);
+  const [calendarGames, setCalendarGames] = useState<Game[]>([]);
+  const [calendarLoading, setCalendarLoading] = useState(false);
+  const [calendarSettledRange, setCalendarSettledRange] = useState("");
+  const [scheduleLoadError, setScheduleLoadError] = useState("");
+  const [upcomingLoading, setUpcomingLoading] = useState(true);
+  const gamesRetryAt = useRef(0);
+  const gamesFailures = useRef(0);
+  const [teamRecords, setTeamRecords] = useState<{ season: number; records: Record<string, string> } | null>(null);
+  const [teamRecordsLoading, setTeamRecordsLoading] = useState(true);
+  const [teamRecordsStatus, setTeamRecordsStatus] = useState("");
+  const [calendarError, setCalendarError] = useState("");
+  const [calendarRetry, setCalendarRetry] = useState(0);
+  const [gameBackNav, setGameBackNav] = useState("Schedule");
+  const [playerBackNav, setPlayerBackNav] = useState("My players");
   const [selectedDate, setSelectedDate] = useState(toDateKey(today));
   const [scheduleTeam, setScheduleTeam] = useState("All teams");
+  const [scheduleScope, setScheduleScope] = useState<GameFilterScope>("all");
+  const [liveScope, setLiveScope] = useState<GameFilterScope>("all");
   const [selectedGameId, setSelectedGameId] = useState<string | null>(null);
   const [gameCenter, setGameCenter] = useState<GameCenterData | null>(null);
   const [gameCenterLoading, setGameCenterLoading] = useState(false);
@@ -776,9 +796,69 @@ function SportsWatchApp() {
   }, []);
 
   useEffect(() => {
+    if (activeNav !== "My teams") return;
+    let cancelled = false;
+    let pending = false;
+    const refresh = async () => {
+      if (pending || document.hidden) return;
+      pending = true;
+      setTeamRecordsLoading(true);
+      try {
+        const payload = await fetchJson<{ data: Record<string, string>; meta: { season: number; stale: boolean; unavailable: boolean } }>("/api/teams/records", { cache: "no-store" });
+        if (cancelled) return;
+        setTeamRecords({ season: payload.meta.season, records: payload.data });
+        setTeamRecordsStatus(payload.meta.unavailable ? "Current-season records are temporarily unavailable." : payload.meta.stale ? "Showing saved current-season records; updates are temporarily unavailable." : "");
+      } catch {
+        if (!cancelled) setTeamRecordsStatus("Could not refresh current-season records. Retrying automatically.");
+      } finally {
+        pending = false;
+        if (!cancelled) setTeamRecordsLoading(false);
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(() => { void refresh(); }, 60_000);
+    document.addEventListener("visibilitychange", refresh);
+    return () => { cancelled = true; window.clearInterval(timer); document.removeEventListener("visibilitychange", refresh); };
+  }, [activeNav]);
+
+  useEffect(() => {
+    if (activeNav !== "Home" && activeNav !== "Live games") return;
+    let cancelled = false;
+    let pending = false;
+    const refresh = async () => {
+      if (pending || document.hidden || Date.now() < gamesRetryAt.current) return;
+      pending = true;
+      try {
+        const payload = await fetchJson<SchedulePayload>("/api/games", { cache: "no-store" });
+        if (cancelled) return;
+        gamesRetryAt.current = payload.meta?.retryAt ?? 0;
+        if (payload.meta?.unavailable) throw new Error(payload.meta.rateLimited ? "The sports provider is rate-limiting requests. Retrying automatically after a cooldown." : "Game data is temporarily unavailable. Retrying automatically.");
+        gamesFailures.current = 0;
+        setLiveSnapshot(payload.data);
+        setLiveError(payload.meta?.stale ? "Showing cached scores. Live updates are temporarily unavailable." : "");
+        setSchedule(payload.data.map((game) => mapApiGame(game, account.timezone)));
+        setScheduleLoadError(payload.meta?.stale ? "Showing cached games. Retrying updates automatically." : "");
+      } catch (cause) {
+        if (!cancelled) {
+          gamesRetryAt.current = Math.max(gamesRetryAt.current, Date.now() + Math.min(30_000 * 2 ** gamesFailures.current++, 15 * 60_000));
+          const message = cause instanceof Error ? cause.message : "Game updates are unavailable. Retrying automatically.";
+          setLiveError(message);
+          setScheduleLoadError(message);
+        }
+      } finally {
+        pending = false;
+        if (!cancelled) { setLiveLoading(false); setUpcomingLoading(false); }
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(() => { void refresh(); }, 30_000);
+    document.addEventListener("visibilitychange", refresh);
+    return () => { cancelled = true; window.clearInterval(timer); document.removeEventListener("visibilitychange", refresh); };
+  }, [activeNav, account.timezone]);
+
+  useEffect(() => {
     let mounted = true;
     Promise.all([
-      fetchJson<{ data: ApiGame[] }>("/api/games"),
       fetchJson<{ data: Account; meta: { authenticated: boolean; onboardingCompleted: boolean } }>("/api/account"),
       fetchJson<{ data: Preferences }>("/api/preferences"),
       fetchJson<{ data: FeedItem[] }>("/api/feed"),
@@ -786,10 +866,9 @@ function SportsWatchApp() {
       fetchJson<{ data: DiscoveryRecommendations }>("/api/recommendations/discovery"),
       fetchJson<{ data: DeliveredAlert[] }>("/api/alerts"),
       fetchJson<{ data: SavedArticleData[] }>("/api/saved/articles").catch(() => ({ data: [] })),
-    ]).then(([gamesPayload, accountPayload, preferencesPayload, feedPayload, catalogPayload, discoveryPayload, alertsPayload, savedPayload]) => {
+    ]).then(([accountPayload, preferencesPayload, feedPayload, catalogPayload, discoveryPayload, alertsPayload, savedPayload]) => {
       if (!mounted) return;
       const loadedAccount = accountPayload.meta.authenticated ? accountPayload.data : { ...accountPayload.data, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || accountPayload.data.timezone };
-      setSchedule(gamesPayload.data.map((game) => mapApiGame(game, loadedAccount.timezone)));
       setAccount(loadedAccount);
       setAuthenticated(accountPayload.meta.authenticated);
       setOnboardingOpen(accountPayload.meta.authenticated && !accountPayload.meta.onboardingCompleted);
@@ -801,7 +880,9 @@ function SportsWatchApp() {
       setNotifications(alertsPayload.data);
       setSavedArticles(savedPayload.data);
     }).catch(() => {
-      if (mounted) setPreferenceStatus("Could not load your saved personalization. Showing local defaults.");
+      if (mounted) {
+        setPreferenceStatus("Could not load your saved personalization. Showing local defaults.");
+      }
     }).finally(() => {
       if (mounted) setPersonalizationLoading(false);
     });
@@ -860,7 +941,7 @@ function SportsWatchApp() {
   }, [lastFeedRefreshAt]);
 
   useEffect(() => {
-    if (!selectedGameId) return;
+    if (!selectedGameId || activeNav !== "Game details") return;
     let mounted = true;
 
     const refreshGameCenter = async (quiet = false) => {
@@ -884,9 +965,9 @@ function SportsWatchApp() {
     };
 
     void refreshGameCenter();
-    const interval = window.setInterval(() => void refreshGameCenter(true), 15_000);
+    const interval = window.setInterval(() => void refreshGameCenter(true), 30_000);
     return () => { mounted = false; window.clearInterval(interval); };
-  }, [selectedGameId, gameCenterRefreshKey, account.timezone]);
+  }, [selectedGameId, gameCenterRefreshKey, account.timezone, activeNav]);
 
   const persistPreferences = async (next: Preferences) => {
     if (!authenticated) {
@@ -970,7 +1051,7 @@ function SportsWatchApp() {
   };
 
   const calendarMonths = useMemo(() => {
-    const firstMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+    const firstMonth = new Date(today.getFullYear(), today.getMonth() - 12, 1);
     const endYear = today.getMonth() <= 5 ? today.getFullYear() : today.getFullYear() + 1;
     const endMonth = new Date(endYear, 5, 1);
     const months: Date[] = [];
@@ -979,7 +1060,47 @@ function SportsWatchApp() {
     return months;
   }, [today]);
 
-  const selectedMonth = calendarMonths[selectedMonthIndex] ?? calendarMonths[0];
+  const selectedMonth = calendarMonths[selectedMonthIndex] ?? calendarMonths[12];
+  const calendarFrom = toDateKey(startOfWeek(new Date(selectedMonth.getFullYear(), selectedMonth.getMonth(), 1)));
+  const calendarTo = toDateKey(addDays(new Date(selectedMonth.getFullYear(), selectedMonth.getMonth() + 1, 0), 7));
+  const calendarPending = calendarLoading || calendarSettledRange !== `${calendarFrom}:${calendarTo}`;
+  useEffect(() => {
+    if (activeNav !== "Schedule") return;
+    let cancelled = false;
+    const key = `${calendarFrom}:${calendarTo}`;
+    const cached = monthCache.peek(key);
+    setCalendarGames(cached?.value.data.map((game) => mapApiGame(game, account.timezone)) ?? []);
+    let retryAt = 0;
+    const refresh = async () => {
+      if (document.hidden || Date.now() < retryAt) return;
+      setCalendarLoading(!monthCache.peek(key));
+      setCalendarError("");
+      try {
+        const entry = await monthCache.get(key, async () => {
+          const payload = await fetchJson<SchedulePayload>(`/api/games?from=${calendarFrom}&to=${calendarTo}`);
+          retryAt = payload.meta?.retryAt ?? 0;
+          if (payload.meta?.unavailable) throw new Error("Schedule unavailable");
+          return payload;
+        }, (payload) => payload.meta?.expiresAt !== undefined
+          ? Math.max(0, payload.meta.expiresAt - Date.now())
+          : scheduleTtlMs({ from: calendarFrom, to: calendarTo }, payload.data));
+        if (cancelled) return;
+        setCalendarGames(entry.value.data.map((game) => mapApiGame(game, account.timezone)));
+        if (entry.value.meta?.stale) setCalendarError("Showing cached games. Scores may be out of date. Try again.");
+      } catch {
+        if (!cancelled) setCalendarError(monthCache.peek(key) ? "Could not refresh. Showing cached games. Try again." : "Could not load games for this month. Try again.");
+      } finally {
+        if (!cancelled) {
+          setCalendarLoading(false);
+          setCalendarSettledRange(key);
+        }
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(() => { void refresh(); }, 30_000);
+    document.addEventListener("visibilitychange", refresh);
+    return () => { cancelled = true; window.clearInterval(timer); document.removeEventListener("visibilitychange", refresh); };
+  }, [activeNav, calendarFrom, calendarTo, calendarRetry, account.timezone]);
   const followedTeams = teams.filter((team) => preferences.followedTeamIds.includes(team.id));
   const followedPlayers = players.filter((player) => preferences.followedPlayerIds.includes(player.id));
   const teamSearchActive = teamSearch.trim().length > 0;
@@ -995,15 +1116,11 @@ function SportsWatchApp() {
     ? playerSearchMatches.slice(0, 30).map((player) => playerRecommendationsById.get(player.id) ?? { player, score: null, reason: `${player.teamName} · ${player.position}` })
     : discovery.players.slice(0, 8);
   const hasPersonalization = preferences.followedTeamIds.length > 0 || preferences.followedPlayerIds.length > 0;
-  const followedScheduleTeamIds = useMemo(() => new Set([...preferences.followedTeamIds, ...followedPlayers.map((player) => player.teamId)]), [followedPlayers, preferences.followedTeamIds]);
-  const popularGameOrder = useMemo(() => new Map(discovery.games.map((recommendation, index) => [recommendation.game.id, index])), [discovery.games]);
-  const teamOptions = ["All teams", ...teams.map((team) => team.name)];
+  const teamOptions = ["All teams", ...(scheduleScope === "following" ? followedTeams : teams).map((team) => team.name)];
+  const effectiveScheduleTeam = teamOptions.includes(scheduleTeam) ? scheduleTeam : "All teams";
   const selectedDay = new Date(`${selectedDate}T12:00:00`);
-  const filteredSchedule = useMemo(() => schedule.filter((game) => {
-    if (scheduleTeam !== "All teams") return game.home === scheduleTeam || game.away === scheduleTeam;
-    if (hasPersonalization) return followedScheduleTeamIds.has(game.homeId) || followedScheduleTeamIds.has(game.awayId);
-    return popularGameOrder.size === 0 || popularGameOrder.has(game.id);
-  }), [hasPersonalization, followedScheduleTeamIds, popularGameOrder, schedule, scheduleTeam]);
+  const scheduleByScope = useMemo(() => filterGamesByTeamScope(calendarGames, preferences.followedTeamIds, scheduleScope), [preferences.followedTeamIds, calendarGames, scheduleScope]);
+  const filteredSchedule = useMemo(() => scheduleByScope.filter((game) => effectiveScheduleTeam === "All teams" || game.home === effectiveScheduleTeam || game.away === effectiveScheduleTeam), [effectiveScheduleTeam, scheduleByScope]);
   const rangeForView = (view: ScheduleView) => {
     if (view === "day") return { start: selectedDay, end: addDays(selectedDay, 1) };
     if (view === "week") { const start = startOfWeek(selectedDay); return { start, end: addDays(start, 7) }; }
@@ -1011,10 +1128,10 @@ function SportsWatchApp() {
   };
   const range = rangeForView(scheduleView);
   const soonestGames = filteredSchedule.filter((game) => { const date = new Date(`${game.date}T12:00:00`); return date >= range.start && date < range.end; }).sort((a, b) => a.date.localeCompare(b.date)).slice(0, 6);
-  const liveGames = schedule.filter((game) => game.status === "live");
-  const featuredLiveGame = liveGames.find((game) => preferences.followedTeamIds.includes(game.homeId) || preferences.followedTeamIds.includes(game.awayId)) ?? liveGames[0];
+  const liveGames = useMemo(() => liveSnapshot.filter((game) => game.status === "live").map((game) => mapApiGame(game, account.timezone)), [liveSnapshot, account.timezone]);
+  const visibleLiveGames = useMemo(() => filterGamesByTeamScope(liveGames, preferences.followedTeamIds, liveScope), [liveGames, liveScope, preferences.followedTeamIds]);
   const unreadCount = notifications.filter((notification) => !notification.read).length;
-  const homeUpcomingGames = filteredSchedule.filter((game) => game.status === "scheduled" && new Date(`${game.date}T12:00:00`) >= today).sort((a, b) => hasPersonalization ? a.date.localeCompare(b.date) : (popularGameOrder.get(a.id) ?? 999) - (popularGameOrder.get(b.id) ?? 999) || a.date.localeCompare(b.date)).slice(0, 2);
+  const homeUpcomingGames = upcomingGamesForDay(schedule, dateKeyInTimeZone(new Date().toISOString(), toDateKey(today), account.timezone));
   const monthDays = new Date(selectedMonth.getFullYear(), selectedMonth.getMonth() + 1, 0).getDate();
   const monthStartDay = new Date(selectedMonth.getFullYear(), selectedMonth.getMonth(), 1).getDay();
   const calendarBlanks = (monthStartDay + 6) % 7;
@@ -1022,8 +1139,8 @@ function SportsWatchApp() {
   const gamesForDate = (dateKey: string) => filteredSchedule.filter((game) => game.date === dateKey);
 
   const moveMonth = (amount: number) => { const nextIndex = selectedMonthIndex + amount; if (nextIndex < 0 || nextIndex >= calendarMonths.length) return; setSelectedMonthIndex(nextIndex); setSelectedDate(toDateKey(calendarMonths[nextIndex])); };
-  const openGameCenter = (gameId: string) => { setSelectedGameId(gameId); setGameCenter(null); setGameCenterError(""); setActiveNav("Live games"); };
-  const closeGameCenter = () => { setSelectedGameId(null); setGameCenter(null); setGameCenterError(""); };
+  const openGameCenter = (gameId: string) => { setGameBackNav(activeNav); setSelectedGameId(gameId); setGameCenter(null); setGameCenterError(""); setActiveNav("Game details"); window.scrollTo(0, 0); };
+  const closeGameCenter = () => { setActiveNav(gameBackNav); setSelectedGameId(null); setGameCenter(null); setGameCenterError(""); };
   const openTeamProfile = async (teamId: string) => {
     setSelectedTeamId(teamId);
     setTeamProfile(null);
@@ -1099,6 +1216,7 @@ function SportsWatchApp() {
     }
   };
   const openPlayerProfile = async (playerId: string) => {
+    if (activeNav !== "Player profile") setPlayerBackNav(activeNav);
     setSelectedPlayerId(playerId);
     setPlayerProfile(null);
     setPlayerProfileError("");
@@ -1132,7 +1250,7 @@ function SportsWatchApp() {
   return <TimeZoneContext.Provider value={account.timezone}><main className="app-shell">
     <aside className="sidebar">
       <div className="brand"><span className="brand-dot" />Sports Watch</div>
-      <nav className="main-nav" aria-label="Main navigation">{["Home", "Schedule", "Live games", "My teams", "My players", "Saved"].map((item) => <button className={activeNav === item || (item === "My teams" && activeNav === "Team profile") || (item === "My players" && activeNav === "Player profile") || (item === "Saved" && activeNav === "Article" && articleBackNav === "Saved") ? "nav-item active" : "nav-item"} onClick={() => setActiveNav(item)} key={item}><span className="nav-icon">{item === "Home" ? "⌂" : item === "Schedule" ? "▦" : item === "Live games" ? "◉" : item === "My teams" ? "◈" : item === "My players" ? "♙" : "◇"}</span>{item}{item === "Live games" && liveGames.length > 0 && <span className="live-pill">{liveGames.length}</span>}{item === "Saved" && savedArticles.length > 0 && <span className="saved-pill">{savedArticles.length}</span>}</button>)}</nav>
+      <nav className="main-nav" aria-label="Main navigation">{["Home", "Schedule", "Live games", "Leaderboard", "My teams", "My players", "Saved"].map((item) => <button className={activeNav === item || (item === "My teams" && activeNav === "Team profile") || (item === "My players" && activeNav === "Player profile") || (item === "Saved" && activeNav === "Article" && articleBackNav === "Saved") ? "nav-item active" : "nav-item"} onClick={() => setActiveNav(item)} key={item}><span className="nav-icon">{item === "Home" ? "⌂" : item === "Schedule" ? "▦" : item === "Live games" ? "◉" : item === "Leaderboard" ? "▤" : item === "My teams" ? "◈" : item === "My players" ? "♙" : "◇"}</span>{item}{item === "Live games" && liveGames.length > 0 && <span className="live-pill">{liveGames.length}</span>}{item === "Saved" && savedArticles.length > 0 && <span className="saved-pill">{savedArticles.length}</span>}</button>)}</nav>
       <div className="sidebar-section-label following-label">Following</div>
       <div className="following-list">{followedTeams.slice(0, 2).map((team) => <button className="following-row following-team" key={team.id} onClick={() => void openTeamProfile(team.id)}><TeamMark short={team.short} color={team.color} imageUrl={team.imageUrl} /><span>{team.name.replace(/^(Golden State|New York|Oklahoma City) /, "")}</span></button>)}{followedPlayers.slice(0, 2).map((player) => <button className="following-row following-player" key={player.id} onClick={() => void openPlayerProfile(player.id)}><PlayerAvatar player={player} className="small-avatar" /><span>{player.name}</span></button>)}{followedTeams.length === 0 && followedPlayers.length === 0 && <div className="following-empty">Nothing followed yet</div>}<button className="add-following" onClick={() => { setSettingsSection("preferences"); setActiveNav("Settings"); }}>＋ Manage following</button></div>
       <div className="sidebar-bottom"><button className={activeNav === "Settings" ? "nav-item active" : "nav-item"} onClick={() => { setSettingsSection("account"); setActiveNav("Settings"); }}><span className="nav-icon">⚙</span>Settings</button><div className="profile"><span className="avatar profile-avatar">{initialsFor(account.displayName)}</span><span><strong>{account.displayName}</strong><small>{authenticated ? account.email : "Shared demo mode"}</small></span>{authenticated ? <button className="profile-action" onClick={() => void signOut()}>Sign out</button> : <button className="profile-action" onClick={() => setAuthOpen(true)}>Sign in</button>}</div></div>
@@ -1140,38 +1258,75 @@ function SportsWatchApp() {
 
     <section className="content-area">
       <header className="topbar"><div className="mobile-brand"><span className="brand-dot" />Sports Watch</div><div className="date-label">{formatLongDateInTimeZone(account.timezone, currentTime)}</div><div className="top-actions">{!authenticated && <button className="top-auth-button" onClick={() => setAuthOpen(true)}>Sign in</button>}<button className="icon-button" aria-label="Search">⌕</button><div className="notification-menu"><button className="notification-button" aria-label={`${unreadCount} unread notifications`} aria-expanded={notificationsOpen} onClick={() => setNotificationsOpen((open) => !open)}>♧{unreadCount > 0 && <span />}</button>{notificationsOpen && <section className="notification-panel" aria-label="Notifications"><div className="notification-header"><div><p className="overline">ALERT INBOX</p><h2>Notifications</h2></div>{unreadCount > 0 && <button onClick={() => void markAllNotificationsRead()}>Mark all read</button>}</div>{notifications.length > 0 ? <div className="notification-list">{notifications.map((notification) => <article className={notification.read ? "notification-row read" : "notification-row"} key={notification.id}><span className="notification-kind">{alertIcons[notification.type]}</span><div><p>{alertLabels[notification.type]} · {formatRelativeTime(notification.deliveredAt)}</p><strong>{notification.title}</strong><span>{notification.body}</span></div></article>)}</div> : <div className="notification-empty">No alerts yet. The worker will add important updates here.</div>}</section>}</div></div></header>{verificationNotice && <div className={verificationNotice.startsWith("That") ? "verification-banner error" : "verification-banner"} role="status"><span>{verificationNotice}</span><button onClick={() => setVerificationNotice("")} aria-label="Dismiss verification message">×</button></div>}
-      <nav className="mobile-nav" aria-label="Mobile navigation">{[["Home", "⌂"], ["Schedule", "▦"], ["Live games", "◉"], ["My teams", "◈"], ["My players", "♙"], ["Saved", "◇"], ["Settings", "⚙"]].map(([item, icon]) => <button className={activeNav === item || (item === "My teams" && activeNav === "Team profile") || (item === "My players" && activeNav === "Player profile") || (item === "Saved" && activeNav === "Article" && articleBackNav === "Saved") ? "active" : ""} onClick={() => { if (item === "Settings") setSettingsSection("account"); setActiveNav(item); }} key={item}><span>{icon}</span>{item === "Live games" ? "Live" : item === "My teams" ? "Teams" : item === "My players" ? "Players" : item}</button>)}</nav>
+      <nav className="mobile-nav" aria-label="Mobile navigation">{[["Home", "⌂"], ["Schedule", "▦"], ["Live games", "◉"], ["Leaderboard", "▤"], ["My teams", "◈"], ["My players", "♙"], ["Saved", "◇"], ["Settings", "⚙"]].map(([item, icon]) => <button className={activeNav === item || (item === "My teams" && activeNav === "Team profile") || (item === "My players" && activeNav === "Player profile") || (item === "Saved" && activeNav === "Article" && articleBackNav === "Saved") ? "active" : ""} onClick={() => { if (item === "Settings") setSettingsSection("account"); setActiveNav(item); }} key={item}><span>{icon}</span>{item === "Live games" ? "Live" : item === "My teams" ? "Teams" : item === "My players" ? "Players" : item}</button>)}</nav>
 
       {activeNav === "Home" ? <>
         <div className="welcome-row"><div><p className="overline">YOUR NBA, IN FOCUS</p><h1>{greetingForTimeZone(account.timezone, currentTime)}, {account.displayName.split(" ")[0]} <span>✦</span></h1><p className="subhead">Here&apos;s what matters across the teams and players you follow.</p></div><button className="catch-up-button" onClick={() => void openCatchUp()} disabled={!catchUpBrief || catchUpLoading}><span className={catchUpLoading ? "catch-up-loading-icon" : ""}>✦</span><span><strong>{catchUpLoading || !catchUpBrief ? "Loading catch-up…" : "Catch me up"}</strong><small>{catchUpLoading || !catchUpBrief ? "Syncing latest NBA updates" : `${catchUpBrief.readTimeMinutes} min read`}</small></span><b>→</b></button></div>
-        <div className="dashboard-grid"><div className="feed-column"><div className="section-heading feed-heading"><div><h2>{hasPersonalization ? "Your feed" : "Popular right now"}</h2><p className="feed-subtitle">{hasPersonalization ? "Ranked for your current favorites" : "League-wide stories to get you started"}</p>{feedRefreshStatus && <p className="feed-refresh-status" aria-live="polite">{feedRefreshStatus}</p>}{feedFreshnessStatus && <p className="feed-freshness-status" aria-live="polite">{feedFreshnessStatus}</p>}</div><div className="feed-heading-actions"><span className="feed-count">{feedItems.length} updates</span><button className="feed-refresh-button" disabled={feedRefreshing || personalizationLoading} onClick={() => void refreshFeed()}><span className={feedRefreshing ? "refresh-icon spinning" : "refresh-icon"}>↻</span>{feedRefreshing ? "Checking…" : "Refresh"}</button></div></div><div className="feed-list" tabIndex={0} aria-label={hasPersonalization ? "Your personalized news feed" : "Popular NBA news feed"}>{personalizationLoading ? <div className="feed-state">Building your personalized feed…</div> : feedItems.length === 0 ? <div className="feed-state"><strong>No current NBA stories are available.</strong><span>Fresh updates will appear here after the next data sync.</span><button onClick={() => setActiveNav("My teams")}>Choose favorites</button></div> : feedItems.map((item) => <article className={`feed-card ${item.accent}`} key={item.id}><div className="feed-icon">{item.kind === "performance" ? "◉" : item.kind === "injury" ? "!" : "✦"}</div><div className="feed-content"><div className="feed-card-top"><p className="card-eyebrow">{item.eyebrow} · {formatRelativeTime(item.publishedAt)}</p><span className="relevance-score">{item.relevanceScore}% {hasPersonalization ? "match" : "popular"}</span></div><h3>{item.title}</h3><p className="card-body">{item.body}</p><div className="feed-meta"><span>{item.reason}</span><button onClick={() => void openArticle(item.id, "Home")}>Read story <span>→</span></button></div></div></article>)}</div></div>
+        <div className="dashboard-grid"><div className="feed-column"><div className="section-heading feed-heading"><div><h2>{hasPersonalization ? "Your feed" : "Popular right now"}</h2><p className="feed-subtitle">{hasPersonalization ? "Ranked for your current favorites" : "League-wide stories to get you started"}</p>{feedRefreshStatus && <p className="feed-refresh-status" aria-live="polite">{feedRefreshStatus}</p>}{feedFreshnessStatus && <p className="feed-freshness-status" aria-live="polite">{feedFreshnessStatus}</p>}</div><div className="feed-heading-actions"><span className="feed-count">{feedItems.length} updates</span><button className="feed-refresh-button" disabled={feedRefreshing || personalizationLoading} onClick={() => void refreshFeed()}><span className={feedRefreshing ? "refresh-icon spinning" : "refresh-icon"}>↻</span>{feedRefreshing ? "Checking…" : "Refresh"}</button></div></div><div className="feed-list" tabIndex={0} aria-label={hasPersonalization ? "Your personalized news feed" : "Popular NBA news feed"}>{personalizationLoading ? <div className="feed-state">Building your personalized feed…</div> : feedItems.length === 0 ? <div className="feed-state"><strong>No current NBA stories are available.</strong><span>Fresh updates will appear here after the next data sync.</span><button onClick={() => setActiveNav("My teams")}>Choose favorites</button></div> : feedItems.map((item) => <article className={`feed-card ${item.accent}`} key={item.id}><div className="feed-icon">{item.kind === "performance" ? "◉" : item.kind === "injury" ? "!" : "✦"}</div><div className="feed-content"><div className="feed-card-top"><p className="card-eyebrow">{item.eyebrow} · {formatRelativeTime(item.publishedAt)}</p><span className="relevance-score">{item.relevanceScore}% {hasPersonalization ? "match" : "popular"}</span><NewsInterestMenu articleId={item.id} onSaved={reloadNewsPreferences} /></div><h3>{item.title}</h3><p className="card-body">{item.body}</p><div className="feed-meta"><span>{item.reason}</span><button onClick={() => void openArticle(item.id, "Home")}>Read story <span>→</span></button></div></div></article>)}</div></div>
           <div className="right-column">
-            {featuredLiveGame ? <LiveGameCard game={featuredLiveGame} onOpen={() => openGameCenter(featuredLiveGame.id)} /> : <section className="section-card"><div className="mini-empty">There are no live games right now.</div></section>}
-            <section className="section-card"><div className="section-heading compact"><h2>{hasPersonalization ? "Upcoming for you" : "Popular upcoming games"}</h2><button className="text-button" onClick={() => setActiveNav("Schedule")}>View schedule <span>→</span></button></div>{homeUpcomingGames.length > 0 ? homeUpcomingGames.map((game) => { const gameDate = new Date(`${game.date}T12:00:00`); return <div className="upcoming-game" key={game.id}><div className="upcoming-date"><strong>{gameDate.toLocaleDateString("en-US", { weekday: "short" }).toUpperCase()}</strong><span>{gameDate.toLocaleDateString("en-US", { month: "short", day: "numeric" }).toUpperCase()}</span></div><div className="upcoming-teams"><div><TeamMark short={game.awayShort} color={game.awayColor} imageUrl={game.awayImageUrl} /><span>{game.awayShort}</span></div><b>{formatTipTime(game.startsAt, game.time, account.timezone, game.date)}</b><div><TeamMark short={game.homeShort} color={game.homeColor} imageUrl={game.homeImageUrl} /><span>{game.homeShort}</span></div></div><span className="tv-badge">{game.network}</span></div>; }) : <div className="mini-empty">There are no upcoming games available.</div>}</section>
+            <section className="section-card" aria-label="Live games on Home"><div className="section-heading compact"><h2>Live games {liveGames.length > 0 && `(${liveGames.length})`}</h2><button className="text-button" onClick={() => setActiveNav("Live games")}>View all →</button></div>{liveError && <p className="preference-status error" role="status">{liveError}</p>}{liveGames.length > 0 ? <div className="home-live-games" tabIndex={0} aria-label="Live matchups">{liveGames.map((game) => <LiveGameCard key={game.id} game={game} onOpen={() => openGameCenter(game.id)} />)}</div> : <div className="mini-empty">{liveLoading ? "Loading live games…" : liveError ? "Unable to confirm live games right now." : "There are no live games right now."}</div>}</section>
+            <section className="section-card"><div className="section-heading compact"><h2>Upcoming games</h2><button className="text-button" onClick={() => setActiveNav("Schedule")}>View schedule <span>→</span></button></div>{scheduleLoadError && homeUpcomingGames.length > 0 && <p role="status">{scheduleLoadError}</p>}{upcomingLoading ? <div className="mini-empty" role="status">Loading upcoming games…</div> : scheduleLoadError && homeUpcomingGames.length === 0 ? <div className="mini-empty" role="alert">{scheduleLoadError}</div> : homeUpcomingGames.length > 0 ? homeUpcomingGames.map((game) => { const gameDate = new Date(`${game.date}T12:00:00`); return <button type="button" className="upcoming-game game-link" key={game.id} onClick={() => openGameCenter(game.id)} aria-label={`Open ${game.away} at ${game.home} game`}><div className="upcoming-date"><strong>{gameDate.toLocaleDateString("en-US", { weekday: "short" }).toUpperCase()}</strong><span>{gameDate.toLocaleDateString("en-US", { month: "short", day: "numeric" }).toUpperCase()}</span></div><div className="upcoming-teams"><div><TeamMark short={game.awayShort} color={game.awayColor} imageUrl={game.awayImageUrl} /><span>{game.awayShort}</span></div><b>{formatTipTime(game.startsAt, game.time, account.timezone, game.date)}</b><div><TeamMark short={game.homeShort} color={game.homeColor} imageUrl={game.homeImageUrl} /><span>{game.homeShort}</span></div></div><span className="tv-badge">{game.network} →</span></button>; }) : <div className="mini-empty">There are no upcoming games available.</div>}</section>
             <section className="section-card alerts-card"><div className="section-heading compact"><div><h2>Your alerts</h2><p>Stay close to what matters.</p></div><span className={preferencesSaving ? "save-state saving" : "save-state"}>{preferencesSaving ? "Saving…" : "Synced"}</span></div>{([['gameStarting', 'Game starting', '30 minutes before tip-off'], ['closeGame', 'Close game', 'Within 5 points in the 4th or a decisive late play'], ['finalScore', 'Final score', 'As soon as the game ends'], ['injuryUpdate', 'Injury updates', 'When availability changes during a game'], ['leadChange', 'Late lead changes', 'When the lead flips in the 4th quarter'], ['milestone', 'Player milestones', 'Notable achievements during live games'], ['standoutPerformance', 'Standout performances', 'For your favorite players']] as Array<[keyof AlertPreferences, string, string]>).map(([key, title, detail]) => <div className="alert-row" key={key}><span className="alert-icon">{alertIcons[key]}</span><span><strong>{title}</strong><small>{detail}</small></span><button aria-label={`Toggle ${title}`} aria-pressed={preferences.alerts[key]} className={preferences.alerts[key] ? "toggle on" : "toggle"} disabled={preferencesSaving} onClick={() => toggleAlert(key)}><i /></button></div>)}</section>
           </div>
         </div>
+      </> : activeNav === "Game details" && selectedGameId ? <>
+        <div className="page-heading"><button className="profile-back" onClick={closeGameCenter}>← {gameBackNav}</button><p className="overline">GAME DETAILS</p><h1>{gameCenter ? `${gameCenter.game.away.short} at ${gameCenter.game.home.short}` : "Game details"}</h1>{gameCenter && <p className="subhead">{gameCenter.game.date} · {gameCenter.game.status === "scheduled" ? formatTipTime(gameCenter.game.startsAt, gameCenter.game.time, account.timezone, gameCenter.game.date) : `${gameCenter.game.awayScore ?? "—"} – ${gameCenter.game.homeScore ?? "—"} · ${gameCenter.game.status === "final" ? "Final" : "Live"}`}</p>}</div>
+        <BoxScoreView key={selectedGameId} gameId={selectedGameId} onOpenPlayer={(id) => void openPlayerProfile(id)} />
+        <GameCenterPanel center={gameCenter} loading={gameCenterLoading} refreshing={gameCenterRefreshing} catchUpLoading={catchUpLoading} error={gameCenterError} onClose={closeGameCenter} onRetry={() => setGameCenterRefreshKey((key) => key + 1)} onCatchUp={() => void openCatchUp(selectedGameId)} />
       </> : activeNav === "Schedule" ? <>
-        <div className="page-heading schedule-heading"><p className="overline">{hasPersonalization ? "YOUR UPCOMING GAMES" : "POPULAR UPCOMING GAMES"}</p><h1>Schedule</h1><p className="subhead">{hasPersonalization ? "Plan around the games you care about, from now through the end of the playoffs." : "Explore high-visibility NBA games while you choose teams and players to follow."} Tip times are shown in {timeZoneDisplayName(account.timezone, currentTime)}.</p></div>
-        <div className="schedule-layout"><section className="calendar-panel"><div className="schedule-panel-header"><div><p className="overline">CALENDAR</p><h2>{formatMonth(selectedMonth)}</h2></div><div className="month-controls"><button onClick={() => moveMonth(-1)} disabled={selectedMonthIndex === 0} aria-label="Previous month">←</button><button onClick={() => moveMonth(1)} disabled={selectedMonthIndex === calendarMonths.length - 1} aria-label="Next month">→</button></div></div><div className="calendar-filter-row"><label htmlFor="schedule-team">Show games for</label><select id="schedule-team" value={scheduleTeam} onChange={(event) => setScheduleTeam(event.target.value)}>{teamOptions.map((team) => <option key={team}>{team}</option>)}</select><span className="calendar-range">{formatMonth(calendarMonths[0])} — {formatMonth(calendarMonths[calendarMonths.length - 1])}</span></div><div className="calendar-weekdays">{["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day) => <span key={day}>{day}</span>)}</div><div className="calendar-grid">{calendarCells.map((day, index) => { const dateKey = day ? toDateKey(new Date(selectedMonth.getFullYear(), selectedMonth.getMonth(), day)) : `blank-${index}`; const dayGames = day ? gamesForDate(dateKey) : []; const isSelected = dateKey === selectedDate; const isToday = dateKey === toDateKey(today); return <button className={day ? `calendar-day ${isSelected ? "selected" : ""} ${isToday ? "today" : ""}` : "calendar-day blank"} key={dateKey} disabled={!day} onClick={() => { if (day) { setSelectedDate(dateKey); setScheduleView("day"); } }}>{day && <><span className="calendar-day-number">{day}</span>{dayGames.length > 0 && <span className="calendar-game-dot" title={`${dayGames.length} game${dayGames.length === 1 ? "" : "s"}`}><i />{dayGames.length}</span>}{dayGames.slice(0, 2).map((game) => <span className="calendar-game-label" key={game.id}>{game.homeShort} <b>·</b> {game.awayShort}</span>)}</>}</button>; })}</div><div className="selected-date-summary"><div><p className="overline">SELECTED DAY</p><h3>{formatShortDate(selectedDay)}</h3></div><span>{gamesForDate(selectedDate).length} game{gamesForDate(selectedDate).length === 1 ? "" : "s"}</span></div>{gamesForDate(selectedDate).length > 0 ? <div className="selected-day-games">{gamesForDate(selectedDate).map((game) => <GameRow game={game} key={game.id} />)}</div> : <div className="empty-schedule compact-empty"><span>◌</span><strong>No games available</strong><small>Try another day or team filter.</small></div>}</section><aside className="soonest-panel"><div className="section-heading compact"><div><p className="overline">QUICK VIEW</p><h2>Soonest games</h2></div><span className="schedule-count">{filteredSchedule.length} total</span></div><div className="schedule-view-tabs" role="tablist" aria-label="Soonest games range">{(["day", "week", "month"] as ScheduleView[]).map((view) => <button className={scheduleView === view ? "active" : ""} key={view} onClick={() => setScheduleView(view)}>{view}</button>)}</div><p className="soonest-description">Showing games for {scheduleView === "day" ? formatShortDate(selectedDay) : scheduleView === "week" ? `the week of ${formatShortDate(range.start)}` : formatMonth(selectedMonth)}.</p>{soonestGames.length > 0 ? <div className="soonest-list">{soonestGames.map((game) => <GameRow game={game} key={game.id} />)}</div> : <div className="empty-schedule"><span>◌</span><strong>No games available</strong><small>There are no upcoming games in this category.</small></div>}<button className="schedule-reset" onClick={() => { setScheduleTeam("All teams"); setScheduleView("month"); setSelectedMonthIndex(0); setSelectedDate(toDateKey(calendarMonths[0])); }}>Reset schedule view <span>↺</span></button></aside></div>
-      </> : activeNav === "Article" ? <ArticleDetailView article={articleDetail} loading={articleLoading} error={articleError} saved={Boolean(selectedArticleId && savedArticles.some((article) => article.id === selectedArticleId))} saving={savingArticleId === selectedArticleId} backLabel={articleBackNav === "Saved" ? "Saved stories" : articleBackNav === "Team profile" ? "Team profile" : "Home"} teams={teams} players={players} onBack={() => setActiveNav(articleBackNav)} onRetry={() => { if (selectedArticleId) void openArticle(selectedArticleId, articleBackNav); }} onToggleSave={() => void toggleArticleSave()} onOpenTeam={(teamId) => void openTeamProfile(teamId)} onOpenPlayer={(playerId) => void openPlayerProfile(playerId)} /> : activeNav === "Saved" ? <SavedStoriesView articles={savedArticles} savingArticleId={savingArticleId} error={savedArticlesError} onOpen={(articleId) => void openArticle(articleId, "Saved")} onRemove={(articleId) => void removeSavedStory(articleId)} /> : activeNav === "Team profile" ? <TeamProfileView profile={teamProfile} loading={teamProfileLoading} error={teamProfileError} isFollowed={Boolean(selectedTeamId && preferences.followedTeamIds.includes(selectedTeamId))} onBack={() => setActiveNav("My teams")} onRetry={() => { if (selectedTeamId) void openTeamProfile(selectedTeamId); }} onToggleFollow={() => { if (selectedTeamId) toggleTeam(selectedTeamId); }} onOpenPlayer={(playerId) => void openPlayerProfile(playerId)} onOpenGame={openGameCenter} onOpenArticle={(articleId) => void openArticle(articleId, "Team profile")} /> : activeNav === "My teams" ? <>
+        <div className="page-heading schedule-heading filtered-page-heading">
+          <div><p className="overline">{scheduleScope === "following" ? "YOUR FOLLOWED TEAMS" : "FULL NBA CALENDAR"}</p><h1>Schedule</h1><p className="subhead">Browse every game or narrow the calendar to teams you follow. Tip times are shown in {timeZoneDisplayName(account.timezone, currentTime)}.</p></div>
+          <GameScopeFilter value={scheduleScope} followedCount={followedTeams.length} label="Filter scheduled games" onChange={(scope) => { setScheduleScope(scope); setScheduleTeam("All teams"); }} />
+        </div>
+        {calendarPending && <p role="status">Loading games for {formatMonth(selectedMonth)}…</p>}
+        {calendarError && <p role="alert">{calendarError} <button className="text-button" onClick={() => setCalendarRetry((value) => value + 1)}>Retry</button></p>}
+        <div className="schedule-layout" aria-busy={calendarPending}>
+          <section className="calendar-panel">
+            <div className="schedule-panel-header"><div><p className="overline">CALENDAR</p><h2>{formatMonth(selectedMonth)}</h2></div><div className="month-controls"><button onClick={() => moveMonth(-1)} disabled={selectedMonthIndex === 0} aria-label="Previous month">←</button><button onClick={() => moveMonth(1)} disabled={selectedMonthIndex === calendarMonths.length - 1} aria-label="Next month">→</button></div></div>
+            <div className="calendar-filter-row"><label htmlFor="schedule-team">Show games for</label><select id="schedule-team" value={effectiveScheduleTeam} onChange={(event) => setScheduleTeam(event.target.value)}>{teamOptions.map((team) => <option key={team}>{team}</option>)}</select><span className="calendar-range">{formatMonth(calendarMonths[0])} — {formatMonth(calendarMonths[calendarMonths.length - 1])}</span></div>
+            <div className="calendar-weekdays">{["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day) => <span key={day}>{day}</span>)}</div>
+            <div className="calendar-grid">{calendarCells.map((day, index) => {
+              const dateKey = day ? toDateKey(new Date(selectedMonth.getFullYear(), selectedMonth.getMonth(), day)) : `blank-${index}`;
+              const dayGames = day ? gamesForDate(dateKey) : [];
+              return <div className={day ? `calendar-day ${dateKey === selectedDate ? "selected" : ""} ${dateKey === toDateKey(today) ? "today" : ""}` : "calendar-day blank"} key={dateKey}>
+                {day && <><button className="calendar-date-button" aria-label={`Show games on ${dateKey}`} aria-pressed={dateKey === selectedDate} onClick={() => { setSelectedDate(dateKey); setScheduleView("day"); }}><span className="calendar-day-number">{day}</span>{dayGames.length > 0 && <span className="calendar-game-dot"><i />{dayGames.length}</span>}</button>
+                {dayGames.slice(0, 2).map((game) => <button className="calendar-game-label" key={game.id} aria-label={`Open ${game.away} at ${game.home} box score`} onClick={() => openGameCenter(game.id)}>{game.awayShort} <b>·</b> {game.homeShort}{game.status === "final" && <span className="calendar-final-score">{game.awayScore ?? "—"}–{game.homeScore ?? "—"} Final</span>}</button>)}
+                {dayGames.length > 2 && <button className="calendar-more-games" onClick={() => { setSelectedDate(dateKey); setScheduleView("day"); }}>+{dayGames.length - 2} more</button>}</>}
+              </div>;
+            })}</div>
+            <div className="selected-date-summary"><div><p className="overline">SELECTED DAY</p><h3>{formatShortDate(selectedDay)}</h3></div><span>{gamesForDate(selectedDate).length} game{gamesForDate(selectedDate).length === 1 ? "" : "s"}</span></div>
+            {calendarPending ? <div className="empty-schedule" role="status">Loading games…</div> : calendarError && gamesForDate(selectedDate).length === 0 ? <div className="empty-schedule">Games could not be loaded. Use Retry above.</div> : gamesForDate(selectedDate).length > 0 ? <div className="selected-day-games">{gamesForDate(selectedDate).map((game) => <GameRow game={game} key={game.id} onOpen={() => openGameCenter(game.id)} />)}</div> : <div className="empty-schedule compact-empty"><span>◌</span><strong>{scheduleScope === "following" ? "No followed-team games" : "No games available"}</strong><small>{scheduleScope === "following" && followedTeams.length === 0 ? "Follow a team to build your schedule." : "Try another day or team filter."}</small></div>}
+          </section>
+          <aside className="soonest-panel">
+            <div className="section-heading compact"><div><p className="overline">QUICK VIEW</p><h2>Games in range</h2></div><span className="schedule-count">{filteredSchedule.length} total</span></div>
+            <div className="schedule-view-tabs" role="tablist" aria-label="Soonest games range">{(["day", "week", "month"] as ScheduleView[]).map((view) => <button className={scheduleView === view ? "active" : ""} key={view} onClick={() => setScheduleView(view)}>{view}</button>)}</div>
+            <p className="soonest-description">Showing {scheduleScope === "following" ? "followed-team " : ""}games for {scheduleView === "day" ? formatShortDate(selectedDay) : scheduleView === "week" ? `the week of ${formatShortDate(range.start)}` : formatMonth(selectedMonth)}.</p>
+            {calendarPending ? <div className="empty-schedule" role="status">Loading games…</div> : calendarError && soonestGames.length === 0 ? <div className="empty-schedule">Games could not be loaded. Use Retry above.</div> : soonestGames.length > 0 ? <div className="soonest-list">{soonestGames.map((game) => <GameRow game={game} key={game.id} onOpen={() => openGameCenter(game.id)} />)}</div> : <div className="empty-schedule"><span>◌</span><strong>{scheduleScope === "following" ? "No followed-team games" : "No games available"}</strong><small>{scheduleScope === "following" && followedTeams.length === 0 ? "Follow a team to see its games here." : "There are no games in this date range."}</small>{scheduleScope === "following" && followedTeams.length === 0 && <button className="empty-filter-action" onClick={() => setActiveNav("My teams")}>Choose teams</button>}</div>}
+            <button className="schedule-reset" onClick={() => { setScheduleScope("all"); setScheduleTeam("All teams"); setScheduleView("day"); setSelectedMonthIndex(12); setSelectedDate(toDateKey(today)); }}>Reset schedule view <span>↺</span></button>
+          </aside>
+        </div>
+      </> : activeNav === "Leaderboard" ? <LeaderboardView metric={leaderboardMetric} selectedPlayerId={leaderboardPlayerId} onMetricChange={setLeaderboardMetric} onOpenPlayer={(id) => void openPlayerProfile(id)} onOpenTeam={(id) => void openTeamProfile(id)} /> : activeNav === "Article" ? <ArticleDetailView article={articleDetail} loading={articleLoading} error={articleError} saved={Boolean(selectedArticleId && savedArticles.some((article) => article.id === selectedArticleId))} saving={savingArticleId === selectedArticleId} backLabel={articleBackNav === "Saved" ? "Saved stories" : articleBackNav === "Team profile" ? "Team profile" : "Home"} teams={teams} players={players} onBack={() => setActiveNav(articleBackNav)} onRetry={() => { if (selectedArticleId) void openArticle(selectedArticleId, articleBackNav); }} onToggleSave={() => void toggleArticleSave()} onOpenTeam={(teamId) => void openTeamProfile(teamId)} onOpenPlayer={(playerId) => void openPlayerProfile(playerId)} /> : activeNav === "Saved" ? <SavedStoriesView articles={savedArticles} savingArticleId={savingArticleId} error={savedArticlesError} onOpen={(articleId) => void openArticle(articleId, "Saved")} onRemove={(articleId) => void removeSavedStory(articleId)} /> : activeNav === "Team profile" ? <TeamProfileView profile={teamProfile} loading={teamProfileLoading} error={teamProfileError} isFollowed={Boolean(selectedTeamId && preferences.followedTeamIds.includes(selectedTeamId))} onBack={() => setActiveNav("My teams")} onRetry={() => { if (selectedTeamId) void openTeamProfile(selectedTeamId); }} onToggleFollow={() => { if (selectedTeamId) toggleTeam(selectedTeamId); }} onOpenPlayer={(playerId) => void openPlayerProfile(playerId)} onOpenGame={openGameCenter} onOpenArticle={(articleId) => void openArticle(articleId, "Team profile")} /> : activeNav === "My teams" ? <>
         <div className="page-heading"><p className="overline">PERSONALIZE YOUR EXPERIENCE</p><h1>My teams</h1><p className="subhead">Choose the teams that should shape your feed, schedule, and alerts.</p>{preferenceStatus && <p className={preferenceStatus.startsWith("Save failed") || preferenceStatus.startsWith("Could not") ? "preference-status error" : "preference-status"}>{preferenceStatus}</p>}</div>
         <section className="preferences-panel">
-          <div className="preference-block"><div className="section-heading"><div><h2>Your teams</h2><p className="panel-copy">Teams you follow and use to personalize your experience.</p></div><span className="count-badge">{followedTeams.length} followed</span></div><div className="preference-list">{followedTeams.length > 0 ? followedTeams.map((team) => <div className="preference-row selected team-preference-row" key={team.id}><button className="team-row-profile" onClick={() => void openTeamProfile(team.id)}><TeamMark short={team.short} color={team.color} imageUrl={team.imageUrl} /><span><strong>{team.name}</strong><small>{team.record} record</small></span></button><button className="row-follow-action" disabled={preferencesSaving} onClick={() => toggleTeam(team.id)}>Unfollow</button></div>) : <div className="discovery-empty">You are not following any teams yet. Add one from the recommendations.</div>}</div></div>
+          <div className="preference-block"><div className="section-heading"><div><h2>Your teams</h2><p className="panel-copy">{nbaSeasonLabel(currentNbaSeasonStart())} regular-season records.</p></div><span className="count-badge">{followedTeams.length} followed</span></div><div className="preference-list">{followedTeams.length > 0 ? followedTeams.map((team) => <div className="preference-row selected team-preference-row" key={team.id}><button className="team-row-profile" onClick={() => void openTeamProfile(team.id)}><TeamMark short={team.short} color={team.color} imageUrl={team.imageUrl} /><span><strong>{team.name}</strong><small>{teamRecords?.season === currentNbaSeasonStart() && teamRecords.records[team.id] ? `${teamRecords.records[team.id]} record` : teamRecordsLoading ? "Loading record…" : "Record unavailable"}</small></span></button><button className="row-follow-action" disabled={preferencesSaving} onClick={() => toggleTeam(team.id)}>Unfollow</button></div>) : <div className="discovery-empty">You are not following any teams yet. Add one from the recommendations.</div>}</div></div>
+          {teamRecordsStatus && <p className="preference-status" role="status">{teamRecordsStatus}</p>}
           <div className="preference-block recommendation-block"><div className="section-heading"><div><h2>{hasPersonalization ? "Teams you may like" : "Popular teams"}</h2><p className="panel-copy">{hasPersonalization ? "Personalized candidates first, then popular teams to fill up to eight spots." : "Trending across current coverage and nationally visible games."}</p></div><span className="count-badge">{teamSearchActive ? `${teamSearchMatches.length} result${teamSearchMatches.length === 1 ? "" : "s"}` : `${discovery.teams.length}/8`}</span></div><EntitySearch value={teamSearch} onChange={setTeamSearch} label="Search NBA teams" placeholder="Search all teams by name or abbreviation" /><div className="preference-list">{visibleTeamSuggestions.length > 0 ? visibleTeamSuggestions.map(({ team, score, reason }) => { const followed = preferences.followedTeamIds.includes(team.id); return <div className="recommendation-row team-recommendation-row" key={team.id}><button className="recommendation-profile team-recommendation-profile" onClick={() => void openTeamProfile(team.id)}><TeamMark short={team.short} color={team.color} imageUrl={team.imageUrl} /><span><strong>{team.name}</strong><small>{reason}</small></span></button>{score !== null && <span className="recommendation-score">{score}%</span>}<button className={followed ? "following-result" : ""} disabled={preferencesSaving || followed} onClick={() => toggleTeam(team.id)}>{followed ? "Following" : "Follow"}</button></div>; }) : <div className="discovery-empty">{teamSearchActive ? `No teams match “${teamSearch}”.` : "You already follow every available team recommendation."}</div>}</div></div>
         </section>
-      </> : activeNav === "Player profile" ? <PlayerProfileView profile={playerProfile} loading={playerProfileLoading} error={playerProfileError} isFollowed={Boolean(selectedPlayerId && preferences.followedPlayerIds.includes(selectedPlayerId))} onBack={() => setActiveNav("My players")} onRetry={() => { if (selectedPlayerId) void openPlayerProfile(selectedPlayerId); }} onToggleFollow={() => { if (selectedPlayerId) togglePlayer(selectedPlayerId); }} /> : activeNav === "My players" ? <>
+      </> : activeNav === "Player profile" ? <PlayerProfileView onOpenLeaderboard={(metric) => { setLeaderboardMetric(metric); setLeaderboardPlayerId(selectedPlayerId); setActiveNav("Leaderboard"); }} profile={playerProfile} loading={playerProfileLoading} error={playerProfileError} isFollowed={Boolean(selectedPlayerId && preferences.followedPlayerIds.includes(selectedPlayerId))} backLabel={playerBackNav} onBack={() => setActiveNav(playerBackNav)} onRetry={() => { if (selectedPlayerId) void openPlayerProfile(selectedPlayerId); }} onToggleFollow={() => { if (selectedPlayerId) togglePlayer(selectedPlayerId); }} /> : activeNav === "My players" ? <>
         <div className="page-heading"><p className="overline">PERSONALIZE YOUR EXPERIENCE</p><h1>My players</h1><p className="subhead">Follow players to prioritize their performances, injuries, and storylines.</p>{preferenceStatus && <p className={preferenceStatus.startsWith("Save failed") || preferenceStatus.startsWith("Could not") ? "preference-status error" : "preference-status"}>{preferenceStatus}</p>}</div>
         <section className="preferences-panel">
           <div className="preference-block"><div className="section-heading"><div><h2>Your players</h2><p className="panel-copy">Players you follow and use to personalize your experience.</p></div><span className="count-badge">{followedPlayers.length} followed</span></div><div className="preference-list">{followedPlayers.length > 0 ? followedPlayers.map((player) => <div className="preference-row selected player-preference-row" key={player.id}><button className="player-row-profile" onClick={() => void openPlayerProfile(player.id)}><PlayerAvatar player={player} className="preference-avatar" /><span><strong>{player.name}</strong><small>{player.teamName} · {player.position}</small></span></button><button className="row-follow-action" disabled={preferencesSaving} onClick={() => togglePlayer(player.id)}>Unfollow</button></div>) : <div className="discovery-empty">You are not following any players yet. Add one from the recommendations.</div>}</div></div>
           <div className="preference-block recommendation-block"><div className="section-heading"><div><h2>{hasPersonalization ? "Players you may like" : "Popular players"}</h2><p className="panel-copy">{hasPersonalization ? "Personalized candidates first, then popular players to fill up to eight spots." : "Trending across recent NBA updates and high-visibility matchups."}</p></div><span className="count-badge">{playerSearchActive ? `${playerSearchMatches.length} result${playerSearchMatches.length === 1 ? "" : "s"}` : `${discovery.players.length}/8`}</span></div><EntitySearch value={playerSearch} onChange={setPlayerSearch} label="Search NBA players" placeholder="Search all players by name, team, or position" /><div className="preference-list">{visiblePlayerSuggestions.length > 0 ? visiblePlayerSuggestions.map(({ player, score, reason }) => { const followed = preferences.followedPlayerIds.includes(player.id); return <div className="recommendation-row player-recommendation-row" key={player.id}><button className="recommendation-profile" onClick={() => void openPlayerProfile(player.id)}><PlayerAvatar player={player} className="preference-avatar" /><span><strong>{player.name}</strong><small>{reason}</small></span></button>{score !== null && <span className="recommendation-score">{score}%</span>}<button className={followed ? "following-result" : ""} disabled={preferencesSaving || followed} onClick={() => togglePlayer(player.id)}>{followed ? "Following" : "Follow"}</button></div>; }) : <div className="discovery-empty">{playerSearchActive ? `No players match “${playerSearch}”.` : "You already follow every available player recommendation."}</div>}</div></div>
         </section>
       </> : activeNav === "Settings" ? <SettingsView account={account} authenticated={authenticated} teams={teams} players={players} preferences={preferences} savingPreferences={preferencesSaving} theme={theme} section={settingsSection} onSectionChange={setSettingsSection} onThemeChange={setTheme} onAccountUpdated={setAccount} onSessionEnded={() => window.location.assign("/?session=password-changed")} onToggleTeam={toggleTeam} onTogglePlayer={togglePlayer} onSignIn={() => setAuthOpen(true)} /> : <>
-        <div className="page-heading"><p className="overline">GAME CENTER</p><h1>Live games</h1><p className="subhead">Follow scores, every play, and the moments changing the game.</p></div>{liveGames.length > 0 ? <section className="live-games-grid">{liveGames.map((game) => <LiveGameCard game={game} key={game.id} onOpen={() => openGameCenter(game.id)} />)}</section> : !selectedGameId && <section className="feed-state"><strong>No games are live right now.</strong><span>Upcoming games are still available in your schedule.</span><button onClick={() => setActiveNav("Schedule")}>View schedule</button></section>}{selectedGameId && <GameCenterPanel center={gameCenter} loading={gameCenterLoading} refreshing={gameCenterRefreshing} catchUpLoading={catchUpLoading} error={gameCenterError} onClose={closeGameCenter} onRetry={() => setGameCenterRefreshKey((key) => key + 1)} onCatchUp={() => void openCatchUp(selectedGameId)} />}
+        <div className="page-heading filtered-page-heading"><div><p className="overline">GAME CENTER</p><h1>Live games</h1><p className="subhead">Follow every live score or focus on teams you follow.</p></div><GameScopeFilter value={liveScope} followedCount={followedTeams.length} label="Filter live games" onChange={setLiveScope} /></div>
+        {liveError && <p className="preference-status error" role="status">{liveError}</p>}
+        {liveLoading ? <section className="feed-state" role="status">Loading live games…</section> : liveError && liveGames.length === 0 ? <section className="feed-state">Unable to confirm live games right now. Retrying automatically.</section> : visibleLiveGames.length > 0 ? <section className="live-games-grid">{visibleLiveGames.map((game) => <LiveGameCard game={game} key={game.id} onOpen={() => openGameCenter(game.id)} />)}</section> : <section className="feed-state"><strong>{liveScope === "following" ? followedTeams.length === 0 ? "Follow a team to personalize live games." : "None of your teams are live right now." : "No games are live right now."}</strong><span>{liveScope === "following" ? followedTeams.length === 0 ? "Your followed teams will appear here whenever they are playing." : "Switch to All games to see the rest of the league." : "Upcoming games are still available in your schedule."}</span><button onClick={() => liveScope === "following" && followedTeams.length === 0 ? setActiveNav("My teams") : liveScope === "following" ? setLiveScope("all") : setActiveNav("Schedule")}>{liveScope === "following" ? followedTeams.length === 0 ? "Choose teams" : "Show all games" : "View schedule"}</button></section>}
+
       </>}
     </section>
 
-    {catchUpOpen && catchUpBrief && <CatchUpModal key={catchUpBrief.generatedAt} brief={catchUpBrief} onClose={() => setCatchUpOpen(false)} />}
+    {catchUpOpen && catchUpBrief && <CatchUpModal key={catchUpBrief.generatedAt} brief={catchUpBrief} onFeedback={reloadNewsPreferences} onClose={() => setCatchUpOpen(false)} />}
     {authOpen && <AuthModal onClose={() => setAuthOpen(false)} />}
     {passwordResetToken && <ResetPasswordModal token={passwordResetToken} onClose={() => setPasswordResetToken("")} onComplete={() => { setPasswordResetToken(""); setAuthOpen(true); }} />}
     {onboardingOpen && <OnboardingModal teams={teams} players={players} recommendedTeamIds={discovery.teams.map(({ team }) => team.id)} recommendedPlayerIds={discovery.players.map(({ player }) => player.id)} initialPreferences={preferences} />}

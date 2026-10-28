@@ -2,12 +2,15 @@ import type { Player, PlayerBio, PlayerCareerStat, PlayerGameLog, PlayerProfile,
 import { canonicalPlayers, canonicalTeams } from "@/lib/catalog";
 import { mockPlayerStats, mockTeamStats } from "@/lib/mock-repository";
 import { nbaSeasonLabel } from "@/lib/season";
+import type { Game } from "@/lib/models";
+import type { GameBoxScore } from "@/lib/box-score";
 
 export type SeasonStats = { players: PlayerStat[]; teams: TeamStat[] };
 export type TeamStandingsSnapshot = { season: number; teams: TeamStat[] };
 
 export interface StatsProvider {
   readonly name: string;
+  getBoxScore?(game: Game): Promise<GameBoxScore>;
   getSeasonStats(season: number): Promise<SeasonStats>;
   getPlayerProfile(player: Player, season: number): Promise<PlayerProfile>;
   getTeamStats(team: Team, season: number): Promise<TeamStat | null>;
@@ -54,6 +57,9 @@ type BdlGameStat = {
   fga?: number;
   fg3m?: number;
   fg3a?: number;
+  ftm?: number;
+  fta?: number;
+  pf?: number;
   reb?: number;
   ast?: number;
   stl?: number;
@@ -98,6 +104,7 @@ function averageToSeason(player: Player, season: number, average: BdlAverage): P
     turnoversPerGame: rounded(numberFrom(stats, "tov", "turnover", "turnovers")),
     fieldGoalPercentage: percent(numberFrom(stats, "fg_pct", "field_goal_percentage")),
     threePointPercentage: percent(numberFrom(stats, "fg3_pct", "three_point_percentage")),
+    ...(stats.ft_pct !== undefined && stats.ft_pct !== null ? { freeThrowPercentage: percent(numberFrom(stats, "ft_pct")) } : {}),
   };
 }
 
@@ -215,6 +222,28 @@ export class BallDontLieStatsProvider implements StatsProvider {
   readonly name = "balldontlie";
 
   constructor(private readonly apiKey: string, private readonly baseUrl = "https://api.balldontlie.io/v1") {}
+
+  async getBoxScore(game: Game): Promise<GameBoxScore> {
+    const id = /^bdl-(\d+)$/.exec(game.id)?.[1];
+    if (!id) throw new Error("Unsupported game identity for BALLDONTLIE stats.");
+    const params = new URLSearchParams({ per_page: "100" });
+    params.append("game_ids[]", id);
+    const rows = await this.requestAll<BdlGameStat>("/stats", params);
+    const shooting = (made?: number, attempted?: number) => made == null || attempted == null ? null : `${made}-${attempted}`;
+    const teams = [game.away, game.home].map((team) => ({
+      teamId: team.id,
+      name: team.name,
+      totals: null,
+      players: rows.filter((row) => row.team && this.canonicalTeam(row.team)?.id === team.id).map((row) => ({
+        playerId: canonicalPlayers.find((player) => player.providerIds?.balldontlie === String(row.player?.id))?.id,
+        name: `${row.player?.first_name ?? ""} ${row.player?.last_name ?? ""}`.trim(),
+        minutes: row.min ?? null, points: row.pts ?? null, rebounds: row.reb ?? null, assists: row.ast ?? null,
+        steals: row.stl ?? null, blocks: row.blk ?? null, turnovers: row.turnover ?? null, fouls: row.pf ?? null,
+        fieldGoals: shooting(row.fgm, row.fga), threePointers: shooting(row.fg3m, row.fg3a), freeThrows: shooting(row.ftm, row.fta), freeThrowsMade: row.ftm ?? null, plusMinus: row.plus_minus ?? null,
+      })),
+    }));
+    return { gameId: game.id, source: this.name, status: teams.every((team) => team.players.length) ? "available" : "unavailable", teams, updatedAt: new Date().toISOString() };
+  }
 
   private async request<T>(path: string) {
     const response = await fetch(`${this.baseUrl.replace(/\/$/, "")}${path}`, { headers: { Authorization: this.apiKey }, cache: "no-store" });
@@ -376,6 +405,7 @@ export class BallDontLieStatsProvider implements StatsProvider {
         turnovers: stat.turnover ?? 0,
         fieldGoals: `${stat.fgm ?? 0}-${stat.fga ?? 0}`,
         threePointers: `${stat.fg3m ?? 0}-${stat.fg3a ?? 0}`,
+        ...(stat.ftm !== undefined && stat.fta !== undefined ? { freeThrows: `${stat.ftm}-${stat.fta}` } : {}),
         plusMinus: stat.plus_minus ?? 0,
       };
     });

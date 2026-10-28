@@ -9,7 +9,10 @@ export type EmailDelivery = { provider: "console" | "resend"; previewUrl?: strin
 
 export async function sendVerificationEmail(input: VerificationEmail): Promise<EmailDelivery> {
   const provider = (process.env.EMAIL_DATA_PROVIDER || "console").toLowerCase();
-  if (provider === "console") return { provider: "console", previewUrl: input.verificationUrl };
+  if (provider === "console") {
+    if (process.env.NODE_ENV === "production") throw new Error("Console email delivery is disabled in production.");
+    return { provider: "console", previewUrl: input.verificationUrl };
+  }
   if (provider !== "resend") throw new Error(`Unsupported email provider: ${provider}`);
   const apiKey = process.env.RESEND_API_KEY?.trim();
   const from = process.env.EMAIL_FROM?.trim();

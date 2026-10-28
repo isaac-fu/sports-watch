@@ -174,7 +174,10 @@ export async function updateAccountSettings(accountId: string, input: { displayN
         WHERE id=$1
         RETURNING id, display_name, email, timezone, created_at, email_verified_at
       `, [accountId, displayName || null, passwordHash, timezone || null]);
-      if (input.newPassword) await client.query("DELETE FROM auth_sessions WHERE account_id=$1", [accountId]);
+      if (input.newPassword) {
+        await client.query("DELETE FROM auth_sessions WHERE account_id=$1", [accountId]);
+        await client.query("DELETE FROM email_verification_tokens WHERE account_id=$1", [accountId]);
+      }
       await client.query("COMMIT");
       return accountFromRow(result.rows[0]);
     } catch (error) {
@@ -193,6 +196,7 @@ export async function updateAccountSettings(accountId: string, input: { displayN
   memory.credentials.set(email, { account, passwordHash: passwordHash ?? credential.passwordHash });
   if (input.newPassword) {
     for (const [tokenHash, session] of Array.from(memory.sessions.entries())) if (session.accountId === accountId) memory.sessions.delete(tokenHash);
+    for (const [tokenHash, verification] of Array.from(memory.verifications.entries())) if (verification.accountId === accountId) memory.verifications.delete(tokenHash);
   }
   return account;
 }
@@ -336,7 +340,7 @@ export async function resetPasswordWithToken(token: string, newPassword: string)
       if (!row) throw new Error("This password reset link is invalid or expired.");
       const accountResult = await client.query("UPDATE accounts SET password_hash=$2, email_verified_at=NOW() WHERE id=$1 RETURNING id, display_name, email, timezone, created_at, email_verified_at", [row.account_id, passwordHash]);
       if (!accountResult.rows[0]) throw new Error("Account not found.");
-      await client.query("UPDATE email_verification_tokens SET consumed_at=NOW() WHERE account_id=$1 AND purpose='password-reset' AND consumed_at IS NULL", [row.account_id]);
+      await client.query("UPDATE email_verification_tokens SET consumed_at=NOW() WHERE account_id=$1 AND consumed_at IS NULL", [row.account_id]);
       await client.query("DELETE FROM auth_sessions WHERE account_id=$1", [row.account_id]);
       await client.query("COMMIT");
       return accountFromRow(accountResult.rows[0]);
@@ -357,7 +361,7 @@ export async function resetPasswordWithToken(token: string, newPassword: string)
   const account = { ...credential.account, emailVerified: true };
   memory.credentials.set(email, { account, passwordHash });
   for (const [key, item] of Array.from(memory.verifications.entries())) {
-    if (item.accountId === account.id && item.purpose === "password-reset") memory.verifications.delete(key);
+    if (item.accountId === account.id) memory.verifications.delete(key);
   }
   for (const [key, session] of Array.from(memory.sessions.entries())) if (session.accountId === account.id) memory.sessions.delete(key);
   return account;

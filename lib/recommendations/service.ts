@@ -1,8 +1,10 @@
+import { boxScoreHighlights } from "@/lib/box-score-highlights";
+import type { GameBoxScore } from "@/lib/box-score";
 import type { CatchUpBrief, Game, GameCenter, NewsArticle, Preferences, SavedArticle } from "@/lib/models";
 import { canonicalPlayers, canonicalTeams } from "@/lib/catalog";
 import { mockNews } from "@/lib/mock-repository";
-import { generateAlertCandidates, generateGameCandidates, generateGameEventCandidates, generateNewsCandidates, generatePlayerCandidates, generateTeamCandidates } from "./candidate-generators";
-import { rankAlertCandidates, rankCatchUpCandidates, rankGameCandidates, rankGameEventCandidates, rankNewsCandidates, rankPlayerCandidates, rankTeamCandidates } from "./rankers";
+import { generateAlertCandidates, generateGameCandidates, generateNewsCandidates, generatePlayerCandidates, generateTeamCandidates } from "./candidate-generators";
+import { rankAlertCandidates, rankCatchUpCandidates, rankGameCandidates, rankNewsCandidates, rankPlayerCandidates, rankTeamCandidates } from "./rankers";
 
 const feedBackfillTarget = 8;
 const recentNewsWindowMs = 7 * 24 * 60 * 60 * 1000;
@@ -58,15 +60,13 @@ export function selectCatchUpGame(preferences: Preferences, games: Game[]) {
     .sort((left, right) => Number(right.status === "live") - Number(left.status === "live") || gameRecency(right).localeCompare(gameRecency(left)))[0] ?? null;
 }
 
-export function getCatchUpBrief(preferences: Preferences, games: Game[], articles: NewsArticle[] = mockNews, gameCenter: GameCenter | null = null, savedArticles: SavedArticle[] = []): CatchUpBrief {
+export function getCatchUpBrief(preferences: Preferences, games: Game[], articles: NewsArticle[] = mockNews, gameCenter: GameCenter | null = null, savedArticles: SavedArticle[] = [], box: GameBoxScore | null = null): CatchUpBrief {
   const coldStart = preferences.followedTeamIds.length === 0 && preferences.followedPlayerIds.length === 0;
   const relevantGame = gameCenter ? (gameCenter.game.status !== "scheduled" ? gameCenter.game : null) : selectCatchUpGame(preferences, games);
-  const eventMoments = gameCenter && relevantGame?.id === gameCenter.game.id
-    ? rankGameEventCandidates(generateGameEventCandidates(gameCenter, preferences))
-    : [];
+  const gameMoments = relevantGame ? boxScoreHighlights(relevantGame, box, preferences) : [];
   const newsMoments = rankCatchUpCandidates(generateNewsCandidates(articles, canonicalTeams, canonicalPlayers, preferences, savedArticles));
-  const moments = eventMoments.length > 0 ? eventMoments : newsMoments;
-  const source: CatchUpBrief["source"] = eventMoments.length > 0 ? "play-by-play" : "news";
+  const moments = [...gameMoments, ...newsMoments].slice(0, 3);
+  const source: CatchUpBrief["source"] = gameMoments.length > 0 ? "box-score" : "news";
   const followedPlayerTeamIds = new Set(canonicalPlayers.filter((player) => preferences.followedPlayerIds.includes(player.id)).map((player) => player.teamId));
   const focusTeam = !coldStart && relevantGame
     ? [relevantGame.home, relevantGame.away].find((team) => preferences.followedTeamIds.includes(team.id) || followedPlayerTeamIds.has(team.id))

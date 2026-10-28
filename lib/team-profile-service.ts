@@ -5,6 +5,8 @@ import { loadNewsArticles, loadSeasonStats } from "./content-repository";
 import { getNbaProvider, getStatsProvider } from "./providers";
 import { currentNbaSeasonStart, nbaSeasonLabel } from "./season";
 import { buildTeamStandings, calculateTeamMetricRankings } from "./team-standings";
+import { publicNewsArticle } from "./news-text";
+import { createNbaGameProvider } from "./game-provider";
 
 type CachedTeamProfile = { profile: TeamProfile; expiresAt: number };
 
@@ -37,7 +39,9 @@ export async function getTeamProfile(teamId: string): Promise<TeamProfile | null
   if (cached && cached.expiresAt > Date.now()) return cached.profile;
 
   const season = currentNbaSeasonStart();
-  const provider = getNbaProvider();
+  const provider = (process.env.SPORTS_DATA_PROVIDER ?? "mock").trim().toLowerCase() === "mock"
+    && process.env.STATS_DATA_PROVIDER !== "nba_api"
+    ? getNbaProvider() : createNbaGameProvider();
   const statsProvider = getStatsProvider();
   const from = new Date();
   from.setDate(from.getDate() - 45);
@@ -70,10 +74,10 @@ export async function getTeamProfile(teamId: string): Promise<TeamProfile | null
     roster: canonicalPlayers.filter((player) => player.teamId === teamId),
     recentGames: games.filter((game) => game.status === "final").sort((left, right) => right.date.localeCompare(left.date)).slice(0, 5),
     upcomingGames: games.filter((game) => game.status !== "final").sort((left, right) => left.date.localeCompare(right.date)).slice(0, 5),
-    articles: newsSnapshot.articles.filter((article) => article.teamIds.includes(teamId)).slice(0, 5),
+    articles: newsSnapshot.articles.filter((article) => article.teamIds.includes(teamId)).slice(0, 5).map(publicNewsArticle),
     source,
     updatedAt: new Date().toISOString(),
   };
-  teamProfileCache.set(teamId, { profile, expiresAt: Date.now() + cacheDurationMs });
+  teamProfileCache.set(teamId, { profile, expiresAt: Date.now() + (gamesSnapshot.source.endsWith("-unavailable") ? 30_000 : cacheDurationMs) });
   return profile;
 }

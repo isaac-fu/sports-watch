@@ -1,6 +1,7 @@
 import type { Game, GameEvent, NewsArticle, Player, SavedArticle, Team } from "@/lib/models";
 
 export type NewsCandidate = {
+  feedback?: ReturnType<typeof import("@/lib/news-feedback").newsFeedbackSignals>;
   article: NewsArticle;
   matchedTeams: Team[];
   matchedPlayers: Player[];
@@ -8,7 +9,7 @@ export type NewsCandidate = {
   importanceScore: number;
   sourceQualityScore: number;
   savedInterestScore: number;
-  sources: Array<"followed-team" | "followed-player" | "saved-interest" | "important-league-update" | "popular-league-update">;
+  sources: Array<"followed-team" | "followed-player" | "saved-interest" | "explicit-interest" | "important-league-update" | "popular-league-update">;
 };
 
 export type TeamCandidate = {

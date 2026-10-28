@@ -74,7 +74,7 @@ export type CatchUpMoment = {
   detail: string;
   reason: string;
   importanceScore: number;
-  source: "game-event" | "news";
+  source: "game-event" | "box-score" | "news";
   context?: string;
 };
 
@@ -85,7 +85,7 @@ export type CatchUpBrief = {
   generatedAt: string;
   game: Game | null;
   moments: CatchUpMoment[];
-  source: "play-by-play" | "news";
+  source: "play-by-play" | "box-score" | "news";
 };
 
 export type AlertType = "gameStarting" | "closeGame" | "finalScore" | "standoutPerformance" | "injuryUpdate" | "leadChange" | "milestone";
@@ -123,6 +123,7 @@ export type PlayerStat = {
   turnoversPerGame?: number;
   fieldGoalPercentage: number;
   threePointPercentage: number;
+  freeThrowPercentage?: number;
 };
 
 export type PlayerBio = {
@@ -167,6 +168,7 @@ export type PlayerGameLog = {
   turnovers: number;
   fieldGoals: string;
   threePointers: string;
+  freeThrows?: string;
   plusMinus: number;
 };
 
@@ -187,6 +189,8 @@ export type PlayerMetricRankings = {
   reboundsPerGame: number;
   assistsPerGame: number;
   stealsPerGame: number;
+  blocksPerGame: number;
+  freeThrowPercentage: number;
   fieldGoalPercentage: number;
   threePointPercentage: number;
   playerCount: number;
@@ -253,7 +257,13 @@ export type NewsArticle = {
   teamIds: string[];
   playerIds: string[];
   tags: string[];
+  articleText?: string;
+  articleTextFetchedAt?: string;
+  articleTextStatus?: ArticleTextStatus;
+  articleTextHash?: string;
 };
+
+export type ArticleTextStatus = "not-attempted" | "rss-content" | "fetched" | "blocked" | "paywalled" | "failed";
 
 export type SavedArticle = NewsArticle & {
   savedAt: string;
@@ -281,6 +291,7 @@ export type AlertPreferences = {
 };
 
 export type Preferences = {
+  newsFeedback?: import("./news-feedback").NewsFeedback;
   followedTeamIds: string[];
   followedPlayerIds: string[];
   alerts: AlertPreferences;

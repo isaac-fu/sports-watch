@@ -1,4 +1,4 @@
-import type { NewsArticle, PlayerStat, SyncResult, TeamStat } from "./models";
+import type { ArticleTextStatus, NewsArticle, PlayerStat, SyncResult, TeamStat } from "./models";
 import { getDbPool } from "./db";
 import { mockNews, mockPlayerStats, mockTeamStats } from "./mock-repository";
 import { cleanNewsArticle } from "./news-text";
@@ -27,10 +27,18 @@ async function ensureContentTables() {
         team_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
         player_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
         tags JSONB NOT NULL DEFAULT '[]'::jsonb,
+        article_text TEXT,
+        article_text_fetched_at TIMESTAMPTZ,
+        article_text_status TEXT NOT NULL DEFAULT 'not-attempted',
+        article_text_hash TEXT,
         provider TEXT NOT NULL,
         synced_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
       CREATE INDEX IF NOT EXISTS news_articles_published_at_idx ON news_articles (published_at DESC);
+      ALTER TABLE news_articles ADD COLUMN IF NOT EXISTS article_text TEXT;
+      ALTER TABLE news_articles ADD COLUMN IF NOT EXISTS article_text_fetched_at TIMESTAMPTZ;
+      ALTER TABLE news_articles ADD COLUMN IF NOT EXISTS article_text_status TEXT NOT NULL DEFAULT 'not-attempted';
+      ALTER TABLE news_articles ADD COLUMN IF NOT EXISTS article_text_hash TEXT;
       CREATE TABLE IF NOT EXISTS player_season_stats (
         season INTEGER NOT NULL,
         player_id TEXT NOT NULL,
@@ -82,6 +90,10 @@ const articleFromRow = (row: Record<string, unknown>): NewsArticle => cleanNewsA
   publishedAt: new Date(String(row.published_at)).toISOString(), url: String(row.url),
   imageUrl: row.image_url ? String(row.image_url) : undefined,
   teamIds: row.team_ids as string[], playerIds: row.player_ids as string[], tags: row.tags as string[],
+  articleText: row.article_text ? String(row.article_text) : undefined,
+  articleTextFetchedAt: row.article_text_fetched_at ? new Date(String(row.article_text_fetched_at)).toISOString() : undefined,
+  articleTextStatus: String(row.article_text_status ?? "not-attempted") as ArticleTextStatus,
+  articleTextHash: row.article_text_hash ? String(row.article_text_hash) : undefined,
 });
 
 export async function saveNewsArticles(articles: NewsArticle[], provider: string) {
@@ -96,14 +108,17 @@ export async function saveNewsArticles(articles: NewsArticle[], provider: string
     await client.query("DELETE FROM news_articles");
     for (const article of articles) {
       await client.query(`
-        INSERT INTO news_articles (id, title, summary, source, published_at, url, image_url, team_ids, player_ids, tags, provider, synced_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10::jsonb, $11, $12)
+        INSERT INTO news_articles (id, title, summary, source, published_at, url, image_url, team_ids, player_ids, tags, article_text, article_text_fetched_at, article_text_status, article_text_hash, provider, synced_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10::jsonb, $11, $12, $13, $14, $15, $16)
         ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, summary = EXCLUDED.summary, source = EXCLUDED.source,
           published_at = EXCLUDED.published_at, url = EXCLUDED.url, image_url = EXCLUDED.image_url,
           team_ids = EXCLUDED.team_ids, player_ids = EXCLUDED.player_ids, tags = EXCLUDED.tags,
+          article_text = EXCLUDED.article_text, article_text_fetched_at = EXCLUDED.article_text_fetched_at,
+          article_text_status = EXCLUDED.article_text_status, article_text_hash = EXCLUDED.article_text_hash,
           provider = EXCLUDED.provider, synced_at = EXCLUDED.synced_at
       `, [article.id, article.title, article.summary, article.source, article.publishedAt, article.url, article.imageUrl ?? null,
-        JSON.stringify(article.teamIds), JSON.stringify(article.playerIds), JSON.stringify(article.tags), provider, syncedAt]);
+        JSON.stringify(article.teamIds), JSON.stringify(article.playerIds), JSON.stringify(article.tags), article.articleText ?? null,
+        article.articleTextFetchedAt ?? null, article.articleTextStatus ?? "not-attempted", article.articleTextHash ?? null, provider, syncedAt]);
     }
     await client.query("COMMIT");
   } catch (error) {
