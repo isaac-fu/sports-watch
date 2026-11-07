@@ -238,6 +238,7 @@ def _player_stat(player: dict[str, Any], season: int, row: dict[str, Any]) -> di
         "teamId": player["teamId"],
         "teamName": player["teamName"],
         "gamesPlayed": _integer(row, "GP"),
+        **({"minutesPerGame": _rounded(_number(row, "MIN"))} if row.get("MIN") is not None else {}),
         "pointsPerGame": _rounded(_number(row, "PTS")),
         "reboundsPerGame": _rounded(_number(row, "REB")),
         "assistsPerGame": _rounded(_number(row, "AST")),

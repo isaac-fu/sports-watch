@@ -10,30 +10,23 @@ const feedBackfillTarget = 8;
 const recentNewsWindowMs = 7 * 24 * 60 * 60 * 1000;
 
 export function getPersonalizedFeed(preferences: Preferences, articles: NewsArticle[] = mockNews, savedArticles: SavedArticle[] = []) {
-  const personalized = rankNewsCandidates(generateNewsCandidates(articles, canonicalTeams, canonicalPlayers, preferences, savedArticles));
-  if (articles.length === 0) return personalized;
-  const savedIds = new Set(savedArticles.map((article) => article.id));
-  const popular = rankNewsCandidates(generateNewsCandidates(articles, canonicalTeams, canonicalPlayers, {
-    ...preferences,
-    followedTeamIds: [],
-    followedPlayerIds: [],
-  })).filter((item) => !savedIds.has(item.id));
+  const personalized = generateNewsCandidates(articles, canonicalTeams, canonicalPlayers, preferences, savedArticles);
+  const popular = generateNewsCandidates(articles, canonicalTeams, canonicalPlayers, {
+    ...preferences, followedTeamIds: [], followedPlayerIds: [],
+  }, savedArticles);
+  const personalStories = new Set(personalized.map((candidate) => candidate.article.storyId ?? candidate.article.id));
+  const candidates = new Map(popular.map((candidate) => [candidate.article.id, candidate]));
+  for (const candidate of personalized) candidates.set(candidate.article.id, candidate);
+  // Rank and collapse the combined pool before counting backfill slots.
+  const ranked = rankNewsCandidates(Array.from(candidates.values()));
+  const byId = new Map(articles.map((article) => [article.id, article]));
+  const personal = ranked.filter((item) => personalStories.has(byId.get(item.id)?.storyId ?? item.id));
   const coldStart = preferences.followedTeamIds.length === 0 && preferences.followedPlayerIds.length === 0 && savedArticles.length === 0;
-  if (coldStart || personalized.length >= feedBackfillTarget) return coldStart ? popular : personalized;
-
-  const recentCutoff = Date.now() - recentNewsWindowMs;
-  const combined = [...personalized];
-  const seenIds = new Set(combined.map((item) => item.id));
-  const seenTitles = new Set(combined.map((item) => item.title.toLowerCase().replace(/[^a-z0-9]/g, "")));
-  for (const item of popular) {
-    const titleKey = item.title.toLowerCase().replace(/[^a-z0-9]/g, "");
-    if (combined.length >= feedBackfillTarget) break;
-    if (new Date(item.publishedAt).getTime() < recentCutoff || seenIds.has(item.id) || seenTitles.has(titleKey)) continue;
-    combined.push(item);
-    seenIds.add(item.id);
-    seenTitles.add(titleKey);
-  }
-  return combined.sort((left, right) => new Date(right.publishedAt).getTime() - new Date(left.publishedAt).getTime() || right.relevanceScore - left.relevanceScore);
+  if (coldStart) return ranked;
+  const ids = new Set(personal.map((item) => item.id));
+  const extra = ranked.filter((item) => !ids.has(item.id) && Date.parse(item.publishedAt) >= Date.now() - recentNewsWindowMs);
+  return [...personal, ...extra.slice(0, Math.max(0, feedBackfillTarget - personal.length))]
+    .sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt) || b.relevanceScore - a.relevanceScore);
 }
 
 export function getDiscoveryRecommendations(preferences: Preferences, games: Game[], articles: NewsArticle[] = mockNews, savedArticles: SavedArticle[] = []) {

@@ -1,9 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { leaderboardMetrics, rankLeaderboardPlayers, rankLeaderboardTeams } from "@/lib/leaderboard";
+import { leaderboardMetrics, playerLeaderboardMetrics, rankLeaderboardPlayers, rankLeaderboardTeams } from "@/lib/leaderboard";
 import { calculatePlayerMetricRankings } from "@/lib/player-rankings";
 import type { PlayerStat, TeamStat } from "@/lib/models";
 const player = (id: string, values: Partial<PlayerStat> = {}): PlayerStat => ({ playerId: id, playerName: id, teamId: "gsw", teamName: "Warriors", gamesPlayed: 3, pointsPerGame: 30, reboundsPerGame: 5, assistsPerGame: 7, stealsPerGame: 1, blocksPerGame: 2, fieldGoalPercentage: 50, threePointPercentage: 40, freeThrowPercentage: 90, ...values });
 describe("leaderboards", () => {
+  it("adds MPG before PPG only to leaderboard columns", () => {
+    expect(playerLeaderboardMetrics.slice(0, 2).map(([, label]) => label)).toEqual(["MPG", "PPG"]);
+    expect(rankLeaderboardPlayers([player("A", { minutesPerGame: 25 }), player("B", { minutesPerGame: 35 })], "minutesPerGame").map((p) => p.playerId)).toEqual(["B", "A"]);
+  });
+  it("requires ceil(70% of team games), excludes unknown teams, and ranks after filtering", () => {
+    const teams = [{ teamId: "gsw", wins: 5, losses: 3 } as TeamStat];
+    const players = [player("A", { gamesPlayed: 5, pointsPerGame: 50 }), player("B", { gamesPlayed: 6 }), player("C", { gamesPlayed: 8 }), player("D", { teamId: "unknown" })];
+    expect(rankLeaderboardPlayers(players, "pointsPerGame", teams).map((p) => [p.playerId, p.rank])).toEqual([["B", 1], ["C", 1]]);
+    expect(rankLeaderboardPlayers(players, "pointsPerGame", [])).toEqual([]);
+    expect(rankLeaderboardPlayers(players, "pointsPerGame", [{ ...teams[0], wins: 0, losses: 0 }])).toEqual([]);
+    expect(rankLeaderboardPlayers([player("A", { gamesPlayed: 7 })], "pointsPerGame", [{ ...teams[0], wins: 10, losses: 0 }])).toHaveLength(1);
+  });
   it("keeps the requested player-column order", () => {
     expect(leaderboardMetrics.map(([, label]) => label)).toEqual(["PPG", "RPG", "APG", "SPG", "BPG", "FG%", "3P%", "FT%"]);
   });

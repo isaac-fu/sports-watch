@@ -1,9 +1,10 @@
 import type { AlertCandidate, CatchUpMoment, FeedItem } from "@/lib/models";
 import { newsFeedbackAdjustment } from "@/lib/news-feedback";
+import { selectStoryArticles } from "@/lib/news-stories";
 import type { GameCandidate, GameEventCandidate, GameRecommendation, NewsCandidate, PlayerCandidate, PlayerRecommendation, TeamCandidate, TeamRecommendation } from "./types";
 
 export function rankNewsCandidates(candidates: NewsCandidate[]): FeedItem[] {
-  const eligible = candidates.filter(({ feedback }) => !feedback?.excluded && (feedback?.articleScore || (feedback?.topicScore ?? 0) > -30));
+  const eligible = selectStoryArticles(candidates.filter(({ feedback }) => !feedback?.excluded && (feedback?.articleScore || (feedback?.topicScore ?? 0) > -30)), (candidate) => candidate.article, (candidate) => candidate.matchedPlayers.length * 45 + candidate.matchedTeams.length * 25 + candidate.savedInterestScore + newsFeedbackAdjustment(candidate.feedback, "feed"));
   const adjustments = new Map(eligible.map((candidate) => [candidate.article.id, newsFeedbackAdjustment(candidate.feedback, "feed")]));
   const ranked = eligible.map(({ article, matchedPlayers, matchedTeams, freshnessHours, importanceScore, sourceQualityScore, savedInterestScore, sources }) => {
     const freshnessScore = Math.max(0, 15 - Math.floor(freshnessHours));
@@ -47,7 +48,7 @@ export function rankNewsCandidates(candidates: NewsCandidate[]): FeedItem[] {
 }
 
 export function rankCatchUpCandidates(candidates: NewsCandidate[], limit = 3): CatchUpMoment[] {
-  return candidates.filter(({ feedback }) => !feedback?.excluded && (feedback?.articleScore || (feedback?.topicScore ?? 0) > -18)).map((candidate) => {
+  return selectStoryArticles(candidates.filter(({ feedback }) => !feedback?.excluded && (feedback?.articleScore || (feedback?.topicScore ?? 0) > -18)), (candidate) => candidate.article, (candidate) => candidate.matchedPlayers.length * 35 + candidate.matchedTeams.length * 25 + newsFeedbackAdjustment(candidate.feedback, "catchup")).map((candidate) => {
     const freshnessScore = Math.max(0, 12 - Math.floor(candidate.freshnessHours));
     const baseScore = Math.min(100, candidate.matchedPlayers.length * 35 + candidate.matchedTeams.length * 25 + candidate.importanceScore * 2 + freshnessScore);
     const importanceScore = Math.max(0, Math.min(100, baseScore + newsFeedbackAdjustment(candidate.feedback, "catchup")));

@@ -96,6 +96,7 @@ function averageToSeason(player: Player, season: number, average: BdlAverage): P
     season,
     seasonLabel: nbaSeasonLabel(season),
     gamesPlayed: numberFrom(stats, "gp", "games_played"),
+    ...(stats.min != null && Number.isFinite(Number(stats.min)) ? { minutesPerGame: rounded(Number(stats.min)) } : {}),
     pointsPerGame: rounded(numberFrom(stats, "pts", "points")),
     reboundsPerGame: rounded(numberFrom(stats, "reb", "rebounds")),
     assistsPerGame: rounded(numberFrom(stats, "ast", "assists")),

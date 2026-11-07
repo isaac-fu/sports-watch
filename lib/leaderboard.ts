@@ -5,11 +5,17 @@ export const leaderboardMetrics = [
   ["stealsPerGame", "SPG"], ["blocksPerGame", "BPG"], ["fieldGoalPercentage", "FG%"],
   ["threePointPercentage", "3P%"], ["freeThrowPercentage", "FT%"],
 ] as const;
-export type LeaderboardMetric = typeof leaderboardMetrics[number][0];
+export const playerLeaderboardMetrics = [["minutesPerGame", "MPG"], ...leaderboardMetrics] as const;
+export type LeaderboardMetric = typeof playerLeaderboardMetrics[number][0];
 export const hasMetric = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 
-export function rankLeaderboardPlayers<T extends PlayerStat>(players: T[], metric: LeaderboardMetric) {
-  const ordered = players.filter((player) => player.gamesPlayed > 0 && hasMetric(player[metric]))
+export function rankLeaderboardPlayers<T extends PlayerStat>(players: T[], metric: LeaderboardMetric, teams?: TeamStat[]) {
+  const gamesByTeam = new Map(teams?.map((team) => [team.teamId, team.wins + team.losses]));
+  const ordered = players.filter((player) => {
+    const total = gamesByTeam.get(player.teamId);
+    const qualified = !teams || (hasMetric(total) && total > 0 && player.gamesPlayed >= Math.ceil(total * 0.7));
+    return qualified && player.gamesPlayed > 0 && hasMetric(player[metric]);
+  })
     .sort((a, b) => b[metric]! - a[metric]! || a.playerName.localeCompare(b.playerName) || a.playerId.localeCompare(b.playerId));
   let rank = 0;
   return ordered.map((player, index) => {

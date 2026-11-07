@@ -33,9 +33,11 @@ try {
   let allowHomeRecovery = false;
   let feedbackInterest = null;
   let useGameStory = false;
+  let failNotificationRead = true;
+  let inbox = [1, 2, 3, 4].map((id) => ({ id: `alert-${id}`, candidateId: `candidate-${id}`, type: "gameStarting", title: `Test notification ${id}`, body: "An NBA update.", priority: 80, occurredAt: now.toISOString(), deliveredAt: now.toISOString(), read: id === 4, readAt: id === 4 ? now.toISOString() : null }));
   const gameStory = { id: `${final.id}:story`, gameId: final.id, title: "Golden State Warriors beat Los Angeles Lakers, 114–108 (6-point win)", reason: "Game recap", source: "box-score", importanceScore: 100, context: "Final", detail: "A complete game recap.", gameHighlights: { summary: "Warriors won by six.", standouts: [{ title: "Stephen Curry: 30 points", detail: "30 points, 8 assists, 4 rebounds." }, { title: "Teammate: double-double", detail: "20 points and 12 rebounds." }], leaders: [{ title: "Opponent: team-leading 7 assists", detail: "7 assists and 8 points." }] } };
   const newsMoment = { id: "news-test", title: "NBA betting preview", detail: "A league betting preview.", reason: "Recent NBA news", importanceScore: 70, source: "news" };
-  const playerSeason = { playerId: player.id, playerName: player.name, teamId: "gsw", teamName: teams[0].name, season: 2026, seasonLabel: "2026-27", gamesPlayed: 3, pointsPerGame: 30, reboundsPerGame: 4, assistsPerGame: 8, stealsPerGame: 2, blocksPerGame: 1, turnoversPerGame: 3, fieldGoalPercentage: 50, threePointPercentage: 40, freeThrowPercentage: 90 };
+  const playerSeason = { minutesPerGame: 32.5, playerId: player.id, playerName: player.name, teamId: "gsw", teamName: teams[0].name, season: 2026, seasonLabel: "2026-27", gamesPlayed: 3, pointsPerGame: 30, reboundsPerGame: 4, assistsPerGame: 8, stealsPerGame: 2, blocksPerGame: 1, turnoversPerGame: 3, fieldGoalPercentage: 50, threePointPercentage: 40, freeThrowPercentage: 90 };
   const line = { playerId: player.id, name: player.name, minutes: "32:10", points: 30, rebounds: 4, assists: 8, steals: 2, blocks: 0, turnovers: 3, fouls: 2, fieldGoals: "10-20", threePointers: "6-12", freeThrows: "4-5", freeThrowsMade: 4, plusMinus: 6 };
   await page.route("**/api/**", async (route) => {
     const url = new URL(route.request().url());
@@ -56,6 +58,14 @@ try {
     let data = [];
     let meta = {};
     if (path === "/api/account") { data = { id: "test", displayName: "Test Fan", timezone: "America/Los_Angeles", email: "test@example.test", emailVerified: true }; meta = { authenticated: true, onboardingCompleted: true }; }
+    else if (path === "/api/alerts") {
+      if (route.request().method() === "PATCH") {
+        if (failNotificationRead) { failNotificationRead = false; await route.fulfill({ status: 503, json: { error: "Unable to save notification. Try again." } }); return; }
+        const body = route.request().postDataJSON();
+        inbox = inbox.map((alert) => body.all || body.id === alert.id ? { ...alert, read: true, readAt: now.toISOString() } : alert);
+      }
+      data = inbox;
+    }
     else if (path === "/api/preferences") data = { followedTeamIds: ["gsw"], followedPlayerIds: [], alerts: {} };
     else if (path === "/api/catalog") data = { teams, players: [player] };
     else if (path === "/api/teams/records") { data = { gsw: "2–1", lal: "0–0" }; meta = { season: now.getMonth() >= 9 ? now.getFullYear() : now.getFullYear() - 1, stale: false, unavailable: false }; }
@@ -84,6 +94,26 @@ try {
   await page.locator(".upcoming-game").nth(3).waitFor();
   assert.equal(await page.getByText("The sports provider is rate-limiting requests. Retrying automatically after a cooldown.", { exact: true }).count(), 0, "successful retry clears errors without a reload");
   console.log("Rate-limit cooldown and automatic upcoming-game recovery passed");
+  assert.equal(await page.locator(".brand .brand-mark").count(), 1);
+  assert.equal(await page.locator(".brand-dot").count(), 0);
+  await page.getByRole("button", { name: "3 unread notifications", exact: true }).click();
+  const inboxPanel = page.getByRole("region", { name: "Notifications", exact: true });
+  assert.equal(await inboxPanel.locator(".notification-row").count(), 3);
+  await inboxPanel.getByRole("button", { name: "Mark as read: Test notification 1", exact: true }).click();
+  await inboxPanel.getByRole("alert").waitFor();
+  assert.equal(await inboxPanel.locator(".notification-row").count(), 3, "failed save must not dismiss notification");
+  await inboxPanel.getByRole("button", { name: "Mark as read: Test notification 1", exact: true }).click();
+  await page.getByRole("button", { name: "2 unread notifications", exact: true }).waitFor();
+  await inboxPanel.getByRole("button", { name: "Read notification: Test notification 2", exact: true }).click();
+  await page.getByRole("button", { name: "1 unread notifications", exact: true }).waitFor();
+  await inboxPanel.getByRole("button", { name: "Mark all read", exact: true }).click();
+  await inboxPanel.getByText("You’re all caught up. No unread notifications.", { exact: true }).waitFor();
+  assert.ok(inbox.every((alert) => alert.read));
+  await page.getByRole("button", { name: "0 unread notifications", exact: true }).click();
+  await page.getByRole("button", { name: "0 unread notifications", exact: true }).click();
+  assert.equal(await inboxPanel.locator(".notification-row").count(), 0);
+  await page.getByRole("button", { name: "0 unread notifications", exact: true }).click();
+  console.log("Notification dismiss, read-all, save failure, unread filtering, and visor logo passed");
   await page.locator(".home-live-games .game-card").nth(1).waitFor();
   assert.equal(await page.locator(".home-live-games .game-card").count(), 2, "Home shows every live matchup");
   await page.getByRole("navigation", { name: "Main navigation", exact: true }).getByRole("button", { name: /Live games/ }).click();
@@ -185,7 +215,7 @@ try {
   assert.ok(inlinePlayer, "Team logo and GP should sit beside the player name");
   assert.equal(await playerBoard.locator("tbody tr").first().getByRole("button").textContent(), "Other Player");
   assert.equal(await playerBoard.locator(".selected-player").getByRole("button").textContent(), "Stephen Curry");
-  assert.deepEqual((await playerBoard.locator("thead th").allTextContents()).map((value) => value.replace(" ↓", "")), ["Rank", "Player", "PPG", "RPG", "APG", "SPG", "BPG", "FG%", "3P%", "FT%"]);
+  assert.deepEqual((await playerBoard.locator("thead th").allTextContents()).map((value) => value.replace(" ↓", "")), ["Rank", "Player", "MPG", "PPG", "RPG", "APG", "SPG", "BPG", "FG%", "3P%", "FT%"]);
   await page.getByRole("button", { name: "Sort by FT%", exact: true }).click();
   await page.getByRole("heading", { name: "Player leaderboard · FT%", exact: true }).waitFor();
   await playerBoard.getByRole("button", { name: "Stephen Curry", exact: true }).click();

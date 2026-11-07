@@ -2,6 +2,7 @@ import type { ArticleTextStatus, NewsArticle, PlayerStat, SyncResult, TeamStat }
 import { getDbPool } from "./db";
 import { mockNews, mockPlayerStats, mockTeamStats } from "./mock-repository";
 import { cleanNewsArticle } from "./news-text";
+import { groupNewsStories } from "./news-stories";
 
 type NewsSnapshot = { articles: NewsArticle[]; source: string; syncedAt: string | null };
 type StatsSnapshot = { players: PlayerStat[]; teams: TeamStat[]; source: string; syncedAt: string | null };
@@ -39,6 +40,8 @@ async function ensureContentTables() {
       ALTER TABLE news_articles ADD COLUMN IF NOT EXISTS article_text_fetched_at TIMESTAMPTZ;
       ALTER TABLE news_articles ADD COLUMN IF NOT EXISTS article_text_status TEXT NOT NULL DEFAULT 'not-attempted';
       ALTER TABLE news_articles ADD COLUMN IF NOT EXISTS article_text_hash TEXT;
+      ALTER TABLE news_articles ADD COLUMN IF NOT EXISTS story_id TEXT;
+      CREATE INDEX IF NOT EXISTS news_articles_story_id_idx ON news_articles (story_id);
       CREATE TABLE IF NOT EXISTS player_season_stats (
         season INTEGER NOT NULL,
         player_id TEXT NOT NULL,
@@ -86,6 +89,7 @@ async function ensureContentTables() {
 }
 
 const articleFromRow = (row: Record<string, unknown>): NewsArticle => cleanNewsArticle({
+  storyId: row.story_id ? String(row.story_id) : undefined,
   id: String(row.id), title: String(row.title), summary: String(row.summary), source: String(row.source),
   publishedAt: new Date(String(row.published_at)).toISOString(), url: String(row.url),
   imageUrl: row.image_url ? String(row.image_url) : undefined,
@@ -97,6 +101,8 @@ const articleFromRow = (row: Record<string, unknown>): NewsArticle => cleanNewsA
 });
 
 export async function saveNewsArticles(articles: NewsArticle[], provider: string) {
+  const previous = await loadNewsArticles();
+  articles = groupNewsStories(articles, previous.articles);
   const syncedAt = new Date().toISOString();
   cache.news = { articles, source: provider, syncedAt };
   const pool = getDbPool();
@@ -105,7 +111,6 @@ export async function saveNewsArticles(articles: NewsArticle[], provider: string
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    await client.query("DELETE FROM news_articles");
     for (const article of articles) {
       await client.query(`
         INSERT INTO news_articles (id, title, summary, source, published_at, url, image_url, team_ids, player_ids, tags, article_text, article_text_fetched_at, article_text_status, article_text_hash, provider, synced_at)
@@ -119,6 +124,7 @@ export async function saveNewsArticles(articles: NewsArticle[], provider: string
       `, [article.id, article.title, article.summary, article.source, article.publishedAt, article.url, article.imageUrl ?? null,
         JSON.stringify(article.teamIds), JSON.stringify(article.playerIds), JSON.stringify(article.tags), article.articleText ?? null,
         article.articleTextFetchedAt ?? null, article.articleTextStatus ?? "not-attempted", article.articleTextHash ?? null, provider, syncedAt]);
+      await client.query("UPDATE news_articles SET story_id=$2 WHERE id=$1", [article.id, article.storyId]);
     }
     await client.query("COMMIT");
   } catch (error) {
@@ -133,8 +139,13 @@ export async function loadNewsArticles(): Promise<NewsSnapshot> {
     try {
       await ensureContentTables();
       const result = await pool.query("SELECT * FROM news_articles ORDER BY published_at DESC LIMIT 100");
+      let loaded = result.rows.map(articleFromRow);
+      if (loaded.some((article) => !article.storyId)) {
+        loaded = groupNewsStories(loaded, loaded);
+        for (const article of loaded) await pool.query("UPDATE news_articles SET story_id=$2 WHERE id=$1 AND story_id IS NULL", [article.id, article.storyId]);
+      }
       if (result.rows.length > 0) return {
-        articles: result.rows.map(articleFromRow),
+        articles: loaded,
         source: String(result.rows[0].provider),
         syncedAt: new Date(result.rows[0].synced_at).toISOString(),
       };

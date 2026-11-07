@@ -121,6 +121,7 @@ export type PlayerStat = {
   teamId: string;
   teamName: string;
   gamesPlayed: number;
+  minutesPerGame?: number;
   pointsPerGame: number;
   reboundsPerGame: number;
   assistsPerGame: number;
@@ -253,6 +254,7 @@ export type TeamProfile = {
 };
 
 export type NewsArticle = {
+  storyId?: string;
   id: string;
   title: string;
   summary: string;
